@@ -1,0 +1,40 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Local databases (SQLite)
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
+# Log files
+logs/
+*.log
+
+# Environment variables and secrets
+.env
+.env.local
+.env.*
+
+# Environments and dependencies
+venv/
+.venv/
+env/
+ENV/
+node_modules/
+
+# IDE / Editor configurations
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/

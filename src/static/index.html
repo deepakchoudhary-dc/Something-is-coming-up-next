@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Security Gateway - Policy & Governance Hub</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- FontAwesome for Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="dark-theme">
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="logo-area">
+                <div class="logo-icon">
+                    <i class="fa-solid fa-shield-halved"></i>
+                </div>
+                <div class="logo-text">
+                    <h2>SECURE.AI</h2>
+                    <span>GATEWAY CTRL</span>
+                </div>
+            </div>
+            
+            <nav class="nav-menu">
+                <button class="nav-item active" data-tab="overview">
+                    <i class="fa-solid fa-chart-line"></i>
+                    <span>Overview</span>
+                </button>
+                <button class="nav-item" data-tab="policies">
+                    <i class="fa-solid fa-sliders"></i>
+                    <span>Policy Hub</span>
+                </button>
+                <button class="nav-item" data-tab="hitl">
+                    <i class="fa-solid fa-user-check"></i>
+                    <span>HITL Queue</span>
+                    <span class="badge" id="hitl-badge" style="display: none;">0</span>
+                </button>
+                <button class="nav-item" data-tab="logs">
+                    <i class="fa-solid fa-list-check"></i>
+                    <span>Audit Logs</span>
+                </button>
+                <button class="nav-item" data-tab="redteaming">
+                    <i class="fa-solid fa-skull-crossbones"></i>
+                    <span>Red-Teaming</span>
+                </button>
+                <button class="nav-item" data-tab="playground">
+                    <i class="fa-solid fa-vial"></i>
+                    <span>Playground</span>
+                </button>
+            </nav>
+
+            <div class="sidebar-footer">
+                <div class="status-indicator">
+                    <span class="pulse-dot green"></span>
+                    <span>Gateway: Active</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Dashboard View Area -->
+        <main class="main-content">
+            <!-- Header Bar -->
+            <header class="content-header">
+                <div class="header-title">
+                    <h1 id="tab-title">Overview</h1>
+                    <p id="tab-subtitle">Real-time AI interaction security statistics</p>
+                </div>
+                <div class="header-actions">
+                    <button class="btn btn-secondary" id="refresh-data-btn">
+                        <i class="fa-solid fa-arrows-rotate"></i>
+                        <span>Sync</span>
+                    </button>
+                    <div class="user-profile">
+                        <div class="avatar"><i class="fa-solid fa-user-shield"></i></div>
+                        <span>Security Admin</span>
+                    </div>
+                </div>
+            </header>
+
+            <!-- Dynamic Tab Content Views -->
+            <div class="view-viewport">
+                <!-- TABS CONTAINER -->
+                
+                <!-- 1. OVERVIEW TAB -->
+                <section class="tab-view active" id="view-overview">
+                    <div class="metrics-grid">
+                        <div class="metric-card">
+                            <div class="metric-info">
+                                <h3>Total Processed</h3>
+                                <p class="metric-value" id="stat-total-processed">0</p>
+                                <span class="metric-sub">Total client queries</span>
+                            </div>
+                            <div class="metric-icon blue"><i class="fa-solid fa-arrow-trend-up"></i></div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-info">
+                                <h3>Blocked Prompts</h3>
+                                <p class="metric-value" id="stat-total-blocked">0</p>
+                                <span class="metric-sub" id="stat-block-rate">0% block rate</span>
+                            </div>
+                            <div class="metric-icon red"><i class="fa-solid fa-ban"></i></div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-info">
+                                <h3>Pending HITL</h3>
+                                <p class="metric-value" id="stat-pending-hitl">0</p>
+                                <span class="metric-sub">Awaiting admin review</span>
+                            </div>
+                            <div class="metric-icon orange"><i class="fa-solid fa-hourglass-half"></i></div>
+                        </div>
+                        <div class="metric-card">
+                            <div class="metric-info">
+                                <h3>Red-Team Posture</h3>
+                                <p class="metric-value" id="stat-redteam-score">--</p>
+                                <span class="metric-sub" id="stat-redteam-rate">No scan run</span>
+                            </div>
+                            <div class="metric-icon purple"><i class="fa-solid fa-crosshairs"></i></div>
+                        </div>
+                    </div>
+
+                    <div class="charts-grid">
+                        <div class="chart-card large">
+                            <div class="card-header">
+                                <h2>Transaction Activity</h2>
+                                <span>Last 7 Days</span>
+                            </div>
+                            <div class="chart-container" id="timeline-chart-container">
+                                <!-- SVG Graph added by JS -->
+                                <div class="chart-placeholder">Loading activity timeline...</div>
+                            </div>
+                        </div>
+                        <div class="chart-card">
+                            <div class="card-header">
+                                <h2>Action Actions</h2>
+                                <span>Threat Containment Breakdown</span>
+                            </div>
+                            <div class="chart-container" id="distribution-chart-container">
+                                <!-- SVG Graph added by JS -->
+                                <div class="chart-placeholder">Loading containment breakdown...</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="recent-alerts-card">
+                        <div class="card-header">
+                            <h2>Recent Flagged Incidents</h2>
+                            <button class="btn-text" id="view-all-logs-shortcut">View Audit Logs</button>
+                        </div>
+                        <div class="logs-table-wrapper">
+                            <table class="logs-table">
+                                <thead>
+                                    <tr>
+                                        <th>Timestamp</th>
+                                        <th>User</th>
+                                        <th>Prompt Preview</th>
+                                        <th>Risk Score</th>
+                                        <th>Action Taken</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="recent-alerts-tbody">
+                                    <tr>
+                                        <td colspan="5" class="table-empty">No security incidents detected.</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 2. POLICY HUB TAB -->
+                <section class="tab-view" id="view-policies">
+                    <div class="policy-container">
+                        <div class="policy-sidebar">
+                            <button class="policy-tab-nav active" data-policy="input_validation">
+                                <h3>Input Validation</h3>
+                                <span>Regex & bounds checking</span>
+                            </button>
+                            <button class="policy-tab-nav" data-policy="content_filtering">
+                                <h3>Content Filtering</h3>
+                                <span>AI classifier limits</span>
+                            </button>
+                            <button class="policy-tab-nav" data-policy="rate_limiting">
+                                <h3>Rate Limiting</h3>
+                                <span>Gateway request rates</span>
+                            </button>
+                            <button class="policy-tab-nav" data-policy="user_access">
+                                <h3>Access Controls (RBAC)</h3>
+                                <span>User permissions</span>
+                            </button>
+                        </div>
+
+                        <div class="policy-form-area">
+                            <div class="policy-form-header">
+                                <div class="form-header-title">
+                                    <h2 id="policy-form-title">Input Validation Policy</h2>
+                                    <p id="policy-form-desc">Define structural length limits and injection blocks.</p>
+                                </div>
+                                <div class="policy-toggle-wrapper">
+                                    <span>Enabled</span>
+                                    <label class="switch">
+                                        <input type="checkbox" id="policy-enabled-toggle" checked>
+                                        <span class="slider round"></span>
+                                    </label>
+                                </div>
+                            </div>
+
+                            <div class="policy-form-fields" id="policy-fields-container">
+                                <!-- Dynamic Fields rendered by JS -->
+                            </div>
+
+                            <div class="policy-form-footer">
+                                <span class="save-status" id="policy-save-status"></span>
+                                <button class="btn btn-primary" id="save-policy-btn">
+                                    <i class="fa-solid fa-floppy-disk"></i>
+                                    <span>Save Policy</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 3. HITL QUEUE TAB -->
+                <section class="tab-view" id="view-hitl">
+                    <div class="hitl-layout">
+                        <div class="hitl-list-panel">
+                            <div class="panel-header">
+                                <h2>Pending Approvals</h2>
+                                <span id="hitl-count-label" class="badge-count">0 pending</span>
+                            </div>
+                            <div class="hitl-list" id="hitl-requests-list">
+                                <!-- Rendered dynamically -->
+                                <div class="empty-state">
+                                    <i class="fa-solid fa-circle-check"></i>
+                                    <h3>Queue Cleared</h3>
+                                    <p>No high-risk requests are awaiting review.</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="hitl-detail-panel" id="hitl-detail-view" style="display: none;">
+                            <div class="panel-header">
+                                <h2>Approval Details</h2>
+                                <span class="risk-tag high">High Risk Target</span>
+                            </div>
+                            <div class="hitl-details-body" id="hitl-details-body">
+                                <!-- Rendered by JS -->
+                            </div>
+                            <div class="hitl-actions">
+                                <button class="btn btn-danger" id="hitl-deny-btn">
+                                    <i class="fa-solid fa-circle-xmark"></i>
+                                    <span>Deny & Block Request</span>
+                                </button>
+                                <button class="btn btn-success" id="hitl-approve-btn">
+                                    <i class="fa-solid fa-circle-check"></i>
+                                    <span>Approve & Release</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 4. AUDIT LOGS TAB -->
+                <section class="tab-view" id="view-logs">
+                    <div class="logs-filter-bar">
+                        <div class="search-input-wrapper">
+                            <i class="fa-solid fa-magnifying-glass"></i>
+                            <input type="text" id="logs-search" placeholder="Search by User ID or Prompt content...">
+                        </div>
+                        <div class="filter-select-wrapper">
+                            <label for="logs-filter-action">Action:</label>
+                            <select id="logs-filter-action">
+                                <option value="">All Transactions</option>
+                                <option value="allowed">Allowed</option>
+                                <option value="blocked_input">Blocked Input</option>
+                                <option value="blocked_output">Blocked Output</option>
+                                <option value="hitl_approved">HITL Approved</option>
+                                <option value="hitl_denied">HITL Denied</option>
+                                <option value="blocked_sandbox_violation">Sandbox Blocked</option>
+                                <option value="redacted_output">Redacted Output</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="audit-logs-card">
+                        <div class="logs-table-wrapper main">
+                            <table class="logs-table">
+                                <thead>
+                                    <tr>
+                                        <th>Timestamp</th>
+                                        <th>User ID</th>
+                                        <th>Prompt</th>
+                                        <th>Risk Score</th>
+                                        <th>Duration</th>
+                                        <th>Action Taken</th>
+                                        <th>Logs</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="logs-tbody">
+                                    <tr>
+                                        <td colspan="7" class="table-empty">Loading audit database...</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="logs-pagination">
+                            <span class="pagination-info" id="pagination-info-label">Showing logs</span>
+                            <div class="pagination-buttons">
+                                <button class="btn btn-secondary btn-sm" id="pagination-prev" disabled>Prev</button>
+                                <button class="btn btn-secondary btn-sm" id="pagination-next">Next</button>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 5. RED-TEAMING TAB -->
+                <section class="tab-view" id="view-redteaming">
+                    <div class="redteam-layout">
+                        <div class="redteam-control-card">
+                            <div class="rt-card-header">
+                                <div class="rt-title">
+                                    <h2>Automated Red-Teaming Suite</h2>
+                                    <p>Scan and identify vulnerabilities in the Gateway filter rules.</p>
+                                </div>
+                                <button class="btn btn-danger" id="run-redteam-scan-btn">
+                                    <i class="fa-solid fa-circle-play"></i>
+                                    <span>Launch Security Audit</span>
+                                </button>
+                            </div>
+
+                            <div class="scan-progress-area" id="scan-progress-area" style="display: none;">
+                                <div class="progress-bar-container">
+                                    <div class="progress-bar-fill" id="scan-progress-fill" style="width: 0%;"></div>
+                                </div>
+                                <div class="progress-labels">
+                                    <span id="scan-progress-status">Simulating attack vectors...</span>
+                                    <span id="scan-progress-percent">0%</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- SCAN REPORT AREA (Hidden until first scan) -->
+                        <div class="scan-report" id="scan-report-container" style="display: none;">
+                            <div class="report-summary-grid">
+                                <div class="summary-card">
+                                    <h4>Security Posture</h4>
+                                    <h2 id="report-posture">Excellent</h2>
+                                    <span id="report-posture-sub">0% bypass rate</span>
+                                </div>
+                                <div class="summary-card">
+                                    <h4>Blocked Attacks</h4>
+                                    <h2 id="report-blocked">0/0</h2>
+                                    <span>Prevented threats</span>
+                                </div>
+                                <div class="summary-card">
+                                    <h4>Bypassed Bypasses</h4>
+                                    <h2 id="report-bypassed" class="text-danger">0</h2>
+                                    <span>Vulnerability gaps</span>
+                                </div>
+                                <div class="summary-card">
+                                    <h4>Scan Duration</h4>
+                                    <h2 id="report-duration">0s</h2>
+                                    <span>Audit response latency</span>
+                                </div>
+                            </div>
+
+                            <div class="report-details-card">
+                                <h2>Detailed Attack Simulation Log</h2>
+                                <div class="logs-table-wrapper report">
+                                    <table class="logs-table">
+                                        <thead>
+                                            <tr>
+                                                <th>Vector ID</th>
+                                                <th>Category</th>
+                                                <th>Payload Description</th>
+                                                <th>Risk Score</th>
+                                                <th>Gateway Action</th>
+                                                <th>Result</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="redteam-report-tbody">
+                                            <!-- Dynamic entries -->
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="payloads-registry-card" id="payloads-registry-card">
+                            <div class="card-header">
+                                <h2>Vulnerability Payload Registry</h2>
+                                <span>Built-in red-team threat scenarios</span>
+                            </div>
+                            <div class="payload-list" id="payloads-registry-list">
+                                <!-- Loaded dynamically -->
+                            </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 6. PLAYGROUND TAB -->
+                <section class="tab-view" id="view-playground">
+                    <div class="playground-layout">
+                        <div class="playground-input-panel">
+                            <h2>Gateway Tester</h2>
+                            <form id="playground-form" class="playground-form">
+                                <div class="form-group">
+                                    <label for="play-user-id">User ID:</label>
+                                    <input type="text" id="play-user-id" value="admin_test" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="play-role">Access Role:</label>
+                                    <select id="play-role">
+                                        <option value="admin">Administrator</option>
+                                        <option value="user" selected>Standard User</option>
+                                        <option value="guest">Guest</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label for="play-prompt">Prompt Input:</label>
+                                    <textarea id="play-prompt" placeholder="Enter your prompt here... For sandbox, use: ```python\nprint('hello')\n```" required></textarea>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group checkbox-group">
+                                        <input type="checkbox" id="play-execute">
+                                        <label for="play-execute">Execute code inside sandbox</label>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="play-context">Context Info:</label>
+                                        <input type="text" id="play-context" placeholder="Optional context metadata">
+                                    </div>
+                                </div>
+                                <button type="submit" class="btn btn-primary btn-block" id="playground-submit-btn">
+                                    <i class="fa-solid fa-paper-plane"></i>
+                                    <span>Transmit Through Gateway</span>
+                                </button>
+                            </form>
+                        </div>
+
+                        <div class="playground-output-panel">
+                            <h2>Security Lifecycle Inspection</h2>
+                            <div class="pipeline-flow">
+                                <div class="pipeline-step" id="step-sanitize">
+                                    <div class="step-circle"><i class="fa-solid fa-broom"></i></div>
+                                    <span>1. Sanitizer</span>
+                                </div>
+                                <div class="pipeline-connector"></div>
+                                <div class="pipeline-step" id="step-classify">
+                                    <div class="step-circle"><i class="fa-solid fa-brain"></i></div>
+                                    <span>2. AI Classifier</span>
+                                </div>
+                                <div class="pipeline-connector"></div>
+                                <div class="pipeline-step" id="step-policy">
+                                    <div class="step-circle"><i class="fa-solid fa-scale-balanced"></i></div>
+                                    <span>3. Policies</span>
+                                </div>
+                                <div class="pipeline-connector" id="connector-sandbox"></div>
+                                <div class="pipeline-step" id="step-sandbox">
+                                    <div class="step-circle"><i class="fa-solid fa-box-open"></i></div>
+                                    <span>4. Sandbox</span>
+                                </div>
+                                <div class="pipeline-connector"></div>
+                                <div class="pipeline-step" id="step-output">
+                                    <div class="step-circle"><i class="fa-solid fa-filter"></i></div>
+                                    <span>5. Redactor</span>
+                                </div>
+                            </div>
+
+                            <div class="playground-result-card" id="playground-result-card" style="display: none;">
+                                <div class="result-header">
+                                    <h3>Transaction Verdict:</h3>
+                                    <span class="action-badge" id="play-verdict-badge">Allowed</span>
+                                </div>
+                                <div class="result-details">
+                                    <div class="detail-row">
+                                        <span>Risk Score:</span>
+                                        <strong id="play-risk-score">0.00</strong>
+                                    </div>
+                                    <div class="detail-row">
+                                        <span>Latency:</span>
+                                        <strong id="play-duration">0.00s</strong>
+                                    </div>
+                                </div>
+
+                                <div class="sandbox-output-block" id="play-sandbox-block" style="display: none;">
+                                    <h4>Sandbox Execution Response</h4>
+                                    <pre id="play-sandbox-output"></pre>
+                                </div>
+
+                                <div class="response-text-block">
+                                    <h4>Response Output</h4>
+                                    <div class="output-content" id="play-response-text"></div>
+                                </div>
+                                
+                                <div class="anomalies-block" id="play-anomalies-block" style="display: none;">
+                                    <h4>Anomalies Flagged</h4>
+                                    <ul id="play-anomalies-list"></ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+
+    <!-- Log Detail Modal -->
+    <div class="modal" id="log-detail-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Transaction Details</h2>
+                <button class="close-modal-btn" id="close-modal-btn">&times;</button>
+            </div>
+            <div class="modal-body" id="log-modal-body">
+                <!-- Content added dynamically -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Custom Script -->
+    <script src="/static/app.js"></script>
+</body>
+</html>
