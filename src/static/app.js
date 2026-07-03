@@ -86,15 +86,19 @@ const DOM = {
     playgroundForm: document.getElementById('playground-form'),
     playgroundSubmitBtn: document.getElementById('playground-submit-btn'),
     playPrompt: document.getElementById('play-prompt'),
+    playSystemPrompt: document.getElementById('play-system-prompt'),
+    playRetrievedContext: document.getElementById('play-retrieved-context'),
     playUserId: document.getElementById('play-user-id'),
     playRole: document.getElementById('play-role'),
     playContext: document.getElementById('play-context'),
     playExecute: document.getElementById('play-execute'),
     
     stepSanitize: document.getElementById('step-sanitize'),
+    stepContext: document.getElementById('step-context'),
     stepClassify: document.getElementById('step-classify'),
     stepPolicy: document.getElementById('step-policy'),
     stepSandbox: document.getElementById('step-sandbox'),
+    stepLeakage: document.getElementById('step-leakage'),
     stepOutput: document.getElementById('step-output'),
     connectorSandbox: document.getElementById('connector-sandbox'),
     
@@ -1060,6 +1064,8 @@ function initPlayground() {
         e.preventDefault();
         
         const prompt = DOM.playPrompt.value;
+        const systemPrompt = DOM.playSystemPrompt.value;
+        const retrievedContext = DOM.playRetrievedContext.value;
         const userId = DOM.playUserId.value;
         const executeCode = DOM.playExecute.checked;
         const context = DOM.playContext.value;
@@ -1073,17 +1079,18 @@ function initPlayground() {
         DOM.playgroundSubmitBtn.querySelector('span').innerText = 'Securing...';
         
         try {
-            // Step 1: Sanitizer active animation
+            // Step 1: Direct Sanitizer active
             setStepStatus(DOM.stepSanitize, 'active');
-            await sleep(400);
+            await sleep(350);
             
             // Make actual API call
-            const startTime = Date.now();
             const res = await fetch('/api/v1/process', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     prompt: prompt,
+                    system_prompt: systemPrompt,
+                    retrieved_context: retrievedContext,
                     user_id: userId,
                     context: context,
                     model: 'gpt-3.5-turbo',
@@ -1092,25 +1099,38 @@ function initPlayground() {
             });
             const data = await res.json();
             
-            // Finish pipeline visual states
-            // Sanitizer check
+            // Step 1 check
             const isBlockedAtInput = data.action_taken === 'blocked_input';
             setStepStatus(DOM.stepSanitize, isBlockedAtInput ? 'blocked' : 'success');
             
             if (isBlockedAtInput) {
-                // Blocked immediately. Highlight Sanitizer as blocked, and skip others
                 DOM.playgroundSubmitBtn.disabled = false;
                 DOM.playgroundSubmitBtn.querySelector('span').innerText = 'Transmit Through Gateway';
                 renderPlaygroundResult(data);
                 return;
             }
 
-            // Step 2: Classifier active
-            await sleep(400);
+            // Step 2: RAG context check
+            setStepStatus(DOM.stepContext, 'active');
+            await sleep(350);
+            const isBlockedAtContext = data.action_taken === 'blocked_indirect_injection';
+            setStepStatus(DOM.stepContext, isBlockedAtContext ? 'blocked' : 'success');
+
+            if (isBlockedAtContext) {
+                DOM.playgroundSubmitBtn.disabled = false;
+                DOM.playgroundSubmitBtn.querySelector('span').innerText = 'Transmit Through Gateway';
+                renderPlaygroundResult(data);
+                return;
+            }
+
+            // Step 3: Classifier active
+            setStepStatus(DOM.stepClassify, 'active');
+            await sleep(350);
             setStepStatus(DOM.stepClassify, data.security_score > 0.4 ? 'blocked' : 'success');
             
-            // Step 3: Policies active
-            await sleep(350);
+            // Step 4: Policies active
+            setStepStatus(DOM.stepPolicy, 'active');
+            await sleep(300);
             const isBlockedAtHITL = data.action_taken === 'hitl_denied';
             setStepStatus(DOM.stepPolicy, isBlockedAtHITL ? 'blocked' : 'success');
             
@@ -1121,11 +1141,12 @@ function initPlayground() {
                 return;
             }
 
-            // Step 4: Sandbox execution check
-            await sleep(350);
+            // Step 5: Sandbox execution check
             if (executeCode && data.sandbox_result) {
                 DOM.connectorSandbox.classList.add('active');
                 DOM.stepSandbox.style.display = 'flex';
+                setStepStatus(DOM.stepSandbox, 'active');
+                await sleep(350);
                 
                 const isBlockedSandbox = data.action_taken === 'blocked_sandbox_violation';
                 setStepStatus(DOM.stepSandbox, isBlockedSandbox ? 'blocked' : 'success');
@@ -1141,7 +1162,21 @@ function initPlayground() {
                 DOM.stepSandbox.style.display = 'none';
             }
 
-            // Step 5: Redactor check
+            // Step 6: Leakage guard check
+            setStepStatus(DOM.stepLeakage, 'active');
+            await sleep(300);
+            const isBlockedLeakage = data.action_taken === 'blocked_system_leak';
+            setStepStatus(DOM.stepLeakage, isBlockedLeakage ? 'blocked' : 'success');
+
+            if (isBlockedLeakage) {
+                DOM.playgroundSubmitBtn.disabled = false;
+                DOM.playgroundSubmitBtn.querySelector('span').innerText = 'Transmit Through Gateway';
+                renderPlaygroundResult(data);
+                return;
+            }
+
+            // Step 7: Redactor check
+            setStepStatus(DOM.stepOutput, 'active');
             await sleep(300);
             const hasRedaction = data.action_taken === 'redacted_output';
             setStepStatus(DOM.stepOutput, hasRedaction ? 'blocked' : 'success');
@@ -1161,9 +1196,9 @@ function initPlayground() {
 }
 
 function resetPipelineSteps() {
-    const steps = [DOM.stepSanitize, DOM.stepClassify, DOM.stepPolicy, DOM.stepSandbox, DOM.stepOutput];
+    const steps = [DOM.stepSanitize, DOM.stepContext, DOM.stepClassify, DOM.stepPolicy, DOM.stepSandbox, DOM.stepLeakage, DOM.stepOutput];
     steps.forEach(s => {
-        s.className = 'pipeline-step';
+        if (s) s.className = 'pipeline-step';
     });
     DOM.connectorSandbox.className = 'pipeline-connector';
     DOM.connectorSandbox.style.display = 'block';

@@ -49,7 +49,9 @@ class SecurityLogger:
         duration: float,
         anomalies: List[Dict],
         action_taken: str,
-        client_ip: Optional[str] = "127.0.0.1"
+        client_ip: Optional[str] = "127.0.0.1",
+        system_prompt: Optional[str] = None,
+        retrieved_context: Optional[str] = None
     ):
         """
         Log a complete security transaction to the SQLite database
@@ -74,6 +76,8 @@ class SecurityLogger:
             db_log = SecurityLog(
                 user_id=user_id,
                 prompt=prompt,
+                system_prompt=system_prompt,
+                retrieved_context=retrieved_context,
                 response=response,
                 risk_score=risk_score,
                 flagged=flagged,
@@ -199,11 +203,13 @@ def log_transaction(
     duration: float,
     anomalies: List[Dict],
     action_taken: str,
-    client_ip: Optional[str] = "127.0.0.1"
+    client_ip: Optional[str] = "127.0.0.1",
+    system_prompt: Optional[str] = None,
+    retrieved_context: Optional[str] = None
 ):
     """Convenience function to log a complete transaction"""
     security_logger.log_transaction(
-        user_id, prompt, response, risk_score, flagged, duration, anomalies, action_taken, client_ip
+        user_id, prompt, response, risk_score, flagged, duration, anomalies, action_taken, client_ip, system_prompt, retrieved_context
     )
 
 def log_anomaly(anomaly_data: Dict[str, Any]):

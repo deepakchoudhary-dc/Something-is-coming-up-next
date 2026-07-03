@@ -3,11 +3,14 @@ Database module for AI Security Gateway - Handles persistence of logs, policies,
 """
 
 import os
+import logging
 from datetime import datetime
 from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, Text, DateTime
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, scoped_session
 from ..config.settings import settings
+
+logger = logging.getLogger(__name__)
 
 # Base class for SQLAlchemy models
 Base = declarative_base()
@@ -33,7 +36,12 @@ class SecurityLog(Base):
     timestamp = Column(DateTime, default=datetime.utcnow, index=True)
     client_ip = Column(String(50), nullable=True)
     user_id = Column(String(100), index=True)
+    
+    # User Inputs & Dynamic Contexts
     prompt = Column(Text, nullable=False)
+    system_prompt = Column(Text, nullable=True)
+    retrieved_context = Column(Text, nullable=True)
+    
     response = Column(Text, nullable=True)
     risk_score = Column(Float, default=0.0)
     flagged = Column(Boolean, default=False)
@@ -46,8 +54,13 @@ class HITLRequest(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     request_id = Column(String(100), unique=True, index=True, nullable=False)
+    
+    # Request data stored separately for auditing/review
     prompt = Column(Text, nullable=False)
+    system_prompt = Column(Text, nullable=True)
+    retrieved_context = Column(Text, nullable=True)
     context = Column(Text, nullable=True)
+    
     model = Column(String(100), default="unknown")
     user_id = Column(String(100), index=True)
     status = Column(String(50), default="pending", index=True)  # pending, approved, denied, timeout
@@ -65,7 +78,25 @@ class PolicyConfig(Base):
     enabled = Column(Boolean, default=True)
 
 def init_db():
-    """Initialize database tables"""
+    """Initialize database tables, dropping them first if we need to align the schemas"""
+    # Check if schema update is needed: we can try to query SecurityLog.system_prompt
+    # If it errors out, it means the schema is old. We drop and recreate.
+    session = SessionLocal()
+    schema_outdated = False
+    try:
+        session.execute("SELECT system_prompt FROM security_logs LIMIT 1")
+    except Exception:
+        schema_outdated = True
+    finally:
+        session.close()
+
+    if schema_outdated:
+        logger.warning("Outdated database schema detected. Dropping old tables to sync new columns...")
+        try:
+            Base.metadata.drop_all(bind=engine)
+        except Exception as ex:
+            logger.error(f"Error dropping outdated tables: {ex}")
+
     Base.metadata.create_all(bind=engine)
     
     # Insert default policies if policy table is empty
@@ -129,7 +160,7 @@ def init_db():
             session.commit()
     except Exception as e:
         session.rollback()
-        raise e
+        logger.error(f"Failed to load default policies: {e}")
     finally:
         session.close()
 

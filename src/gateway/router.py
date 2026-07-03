@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 # Request and Response schemas
 class AIRequest(BaseModel):
     prompt: str
+    system_prompt: Optional[str] = "You are a secure AI assistant."
+    retrieved_context: Optional[str] = None
     user_id: str
     context: Optional[str] = None
     model: Optional[str] = "gpt-3.5-turbo"
@@ -68,11 +70,12 @@ async def process_ai_request(request: AIRequest):
     anomalies_list = []
 
     try:
-        # Step 1: Input Sanitization & Validation
         input_filter = InputFilter()
+
+        # Step 1A: Direct Input Sanitization & Validation
         sanitized_prompt = input_filter.sanitize(request.prompt)
 
-        # Check anomalous behaviors
+        # Check anomalous behaviors in user prompt
         anomaly_check = detect_anomaly({"prompt": sanitized_prompt})
         if anomaly_check["detected"]:
             anomalies_list.extend(anomaly_check["anomalies"])
@@ -92,7 +95,9 @@ async def process_ai_request(request: AIRequest):
                 flagged=flagged,
                 duration=duration,
                 anomalies=anomalies_list,
-                action_taken=action_taken
+                action_taken=action_taken,
+                system_prompt=request.system_prompt,
+                retrieved_context=request.retrieved_context
             )
             return AIResponse(
                 response=response_text,
@@ -102,6 +107,37 @@ async def process_ai_request(request: AIRequest):
                 action_taken=action_taken,
                 anomalies=anomalies_list
             )
+
+        # Step 1B: Indirect Prompt Injection Check (RAG)
+        if request.retrieved_context:
+            sanitized_context = input_filter.sanitize(request.retrieved_context)
+            if input_filter.is_indirect_injection(sanitized_context):
+                action_taken = "blocked_indirect_injection"
+                flagged = True
+                security_score = 1.0
+                response_text = "Blocked: Malicious instructions detected in retrieved RAG context."
+                
+                duration = time.time() - start_time
+                log_transaction(
+                    user_id=request.user_id,
+                    prompt=request.prompt,
+                    response=response_text,
+                    risk_score=security_score,
+                    flagged=flagged,
+                    duration=duration,
+                    anomalies=anomalies_list,
+                    action_taken=action_taken,
+                    system_prompt=request.system_prompt,
+                    retrieved_context=request.retrieved_context
+                )
+                return AIResponse(
+                    response=response_text,
+                    security_score=security_score,
+                    flagged=flagged,
+                    processing_time=duration,
+                    action_taken=action_taken,
+                    anomalies=anomalies_list
+                )
 
         # Step 2: AI-powered Classification
         classifier = AIClassifier()
@@ -130,7 +166,9 @@ async def process_ai_request(request: AIRequest):
                     flagged=True,
                     duration=duration,
                     anomalies=anomalies_list,
-                    action_taken=action_taken
+                    action_taken=action_taken,
+                    system_prompt=request.system_prompt,
+                    retrieved_context=request.retrieved_context
                 )
                 return AIResponse(
                     response=response_text,
@@ -166,7 +204,9 @@ async def process_ai_request(request: AIRequest):
                     flagged=True,
                     duration=duration,
                     anomalies=anomalies_list,
-                    action_taken=action_taken
+                    action_taken=action_taken,
+                    system_prompt=request.system_prompt,
+                    retrieved_context=request.retrieved_context
                 )
                 return AIResponse(
                     response=response_text,
@@ -185,34 +225,52 @@ async def process_ai_request(request: AIRequest):
             else:
                 response_text = f"Code failed execution.\n[ERROR]\n{sandbox_result['error']}"
         else:
-            # Typical downstream mock model output
-            response_text = f"Processed successfully: Thank you for your request. Model analyzed context: {request.context or 'none'}."
+            # Smart Mock Response Generator: if prompt requests system instructions, simulate a leak
+            prompt_lower = sanitized_prompt.lower()
+            if "system prompt" in prompt_lower or "instructions" in prompt_lower or "secret" in prompt_lower:
+                response_text = f"Sure! Here is the system prompt configuration: {request.system_prompt or 'None'}"
+            else:
+                response_text = f"Processed successfully: Thank you for your request. Model analyzed context: {request.context or 'none'}."
 
-        # Step 6: Output Filtering
-        filtered_response = input_filter.filter_output(response_text)
-        if "[REDACTED]" in filtered_response and filtered_response != response_text:
+        # Step 6: Output System Prompt Leakage & Verification
+        if request.system_prompt and input_filter.detect_system_leak(response_text, request.system_prompt):
+            action_taken = "blocked_system_leak"
+            flagged = True
+            security_score = 0.9
+            response_text = "Blocked: Response contains sensitive system instructions."
             anomalies_list.append({
-                "type": "data_leak_redaction",
-                "description": "Sensitive patterns (PII/keys) were redacted from the AI response."
+                "type": "system_leakage_guard",
+                "description": "Output blocked to prevent disclosure of system prompt instructions."
             })
-            if action_taken == "allowed":
-                action_taken = "redacted_output"
+        else:
+            # Output Filtering (PII Redactions)
+            filtered_response = input_filter.filter_output(response_text)
+            if "[REDACTED]" in filtered_response and filtered_response != response_text:
+                anomalies_list.append({
+                    "type": "data_leak_redaction",
+                    "description": "Sensitive patterns (PII/keys) were redacted from the AI response."
+                })
+                if action_taken == "allowed":
+                    action_taken = "redacted_output"
+            response_text = filtered_response
 
         # Step 7: Final Transaction Log & Return
         duration = time.time() - start_time
         log_transaction(
             user_id=request.user_id,
             prompt=request.prompt,
-            response=filtered_response,
+            response=response_text,
             risk_score=security_score,
             flagged=flagged,
             duration=duration,
             anomalies=anomalies_list,
-            action_taken=action_taken
+            action_taken=action_taken,
+            system_prompt=request.system_prompt,
+            retrieved_context=request.retrieved_context
         )
 
         return AIResponse(
-            response=filtered_response,
+            response=response_text,
             security_score=security_score,
             flagged=flagged,
             processing_time=duration,

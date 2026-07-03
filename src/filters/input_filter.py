@@ -1,5 +1,6 @@
+
 """
-Input/Output Filter Module - Handles input sanitization and output redaction (credentials, PII)
+Input/Output Filter Module - Handles input sanitization, RAG context validation, PII redaction, and system leakage checks
 """
 
 import re
@@ -58,14 +59,14 @@ class InputFilter:
         # Compile regex patterns
         self.compiled_patterns = [re.compile(pattern, re.IGNORECASE) for pattern in self.malicious_patterns]
 
-        # Standard bounds (overridden by policies dynamically if configured)
+        # Standard bounds
         self.max_length = 10000
         self.min_length = 1
 
     def sanitize(self, input_text: str) -> str:
         """
         Sanitize input text by removing null bytes, filtering control codes,
-        and decode base64 payloads to inspect hidden strings.
+        and decoding base64 payloads to inspect hidden strings.
         """
         if not input_text:
             return ""
@@ -110,12 +111,103 @@ class InputFilter:
 
         return False
 
+    def is_indirect_injection(self, context_text: str) -> bool:
+        """
+        Scan retrieved RAG external documents/contexts for hidden prompt injections
+        """
+        if not context_text:
+            return False
+            
+        # 1. Check standard malicious patterns
+        if self.is_malicious(context_text):
+            logger.warning("Indirect Prompt Injection detected in retrieved RAG context!")
+            return True
+            
+        # 2. Check for RAG-specific injection triggers (hidden instructions)
+        rag_triggers = [
+            r"instead\s+of\s+following\s+the\s+user",
+            r"ignore\s+(?:the\s+)?user's\s+(?:instructions|question|query)",
+            r"tell\s+the\s+user\s+that",
+            r"stop\s+reading\s+and\s+respond",
+            r"override\s+previous\s+context",
+            r"new\s+system\s+directive"
+        ]
+        
+        for trig in rag_triggers:
+            if re.search(trig, context_text, re.IGNORECASE):
+                logger.warning(f"RAG Indirect trigger matched: '{trig}'")
+                return True
+                
+        return False
+
+    def detect_system_leak(self, response_text: str, system_prompt: str) -> bool:
+        """
+        Detect if the generated response leaks instructions from the system prompt.
+        Uses a combination of multi-word phrase matching and unique word overlap ratio.
+        """
+        if not response_text or not system_prompt:
+            return False
+
+        resp_lower = response_text.lower().strip()
+        sys_lower = system_prompt.lower().strip()
+
+        # Simple ignore default short prompts
+        if len(sys_lower) < 15:
+            return False
+
+        # 1. Check for exact phrase matches of length >= 6 words
+        # Clean punctuation for comparison
+        clean_sys = re.sub(r'[^\w\s]', '', sys_lower)
+        clean_resp = re.sub(r'[^\w\s]', '', resp_lower)
+
+        sys_words = clean_sys.split()
+        resp_words = clean_resp.split()
+
+        # Scan for matching window of 6 words
+        phrase_len = 6
+        if len(sys_words) >= phrase_len:
+            for i in range(len(sys_words) - phrase_len + 1):
+                phrase = " ".join(sys_words[i : i + phrase_len])
+                if phrase in clean_resp:
+                    logger.warning(f"System prompt leakage: exact phrase match detected: '{phrase}'")
+                    return True
+
+        # 2. Check for significant word overlap ratio (ignoring common stop words)
+        stop_words = {
+            'the', 'a', 'an', 'and', 'or', 'but', 'if', 'then', 'else', 'is', 'are', 'was', 'were', 
+            'be', 'been', 'to', 'for', 'of', 'in', 'on', 'at', 'by', 'with', 'about', 'you', 'your', 
+            'i', 'we', 'they', 'he', 'she', 'it', 'me', 'us', 'them', 'him', 'her', 'this', 'that',
+            'these', 'those', 'user', 'prompt', 'assistant', 'system', 'instructions'
+        }
+
+        def get_meaningful_words(text):
+            words = re.findall(r'\b[a-z]{4,}\b', text.lower())
+            return {w for w in words if w not in stop_words}
+
+        sys_unique = get_meaningful_words(system_prompt)
+        resp_unique = get_meaningful_words(response_text)
+
+        if not sys_unique:
+            return False
+
+        # Calculate overlap
+        intersection = sys_unique.intersection(resp_unique)
+        overlap_ratio = len(intersection) / len(sys_unique)
+
+        # If more than 35% of the unique instruction words leak, block it
+        leak_threshold = 0.35
+        if overlap_ratio > leak_threshold:
+            logger.warning(f"System prompt leakage: overlap ratio {overlap_ratio:.2f} exceeds threshold {leak_threshold:.2f}")
+            return True
+
+        return False
+
     def filter_output(self, output_text: str) -> str:
         """
         Scan and redact PII, credentials, database connection strings, and cloud/AI API tokens from output
         """
         sensitive_patterns = [
-            # Credit Cards (Luhn format general match)
+            # Credit Cards
             (r'\b(?:\d[ -]*?){13,16}\b', '[REDACTED CREDIT CARD]'),
             
             # Email addresses
@@ -166,7 +258,7 @@ class InputFilter:
         if analysis["length"] > 5000:
             score += 0.25
         if not analysis["has_delimiters"]:
-            score += 0.1  # Warn if system prompt separation is missing
+            score += 0.1
         score += len(analysis["suspicious_keywords"]) * 0.15
 
         analysis["score"] = min(max(score, 0.0), 1.0)
