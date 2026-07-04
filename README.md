@@ -1,146 +1,108 @@
-# AI Security Gateway
+# AI Security Gateway - Secure.AI Hub
 
-A scalable, enterprise-grade AI Security Gateway that acts as a centralized defense layer for monitoring, filtering, and securing all AI-driven interactions across web tools, browser extensions, and AI agents.
+A production-grade, highly resilient **AI Security Gateway** acting as an active reverse-proxy firewall and governance hub. It wraps around your enterprise LLM endpoints (like OpenAI or local Ollama deployments) to sanitize prompt inputs, run code inside AST-validated subprocess sandboxes, block off-topic queries, redact output PII, and handle human-in-the-loop (HITL) approval states.
 
-## Features
+---
 
-### Core Capabilities
+## Key Capabilities (OWASP LLM Top 10 Aligned)
 
-- **Input Sanitization & Validation**: Multi-layer filters using regex, semantic analysis, and AI-powered classifiers
-- **Prompt Engineering & Structural Guardrails**: Structured prompt templates with clear delimiters
-- **Access Control & Sandbox Environment**: Role-based access control and isolated execution environments
-- **Runtime Monitoring & Anomaly Detection**: Real-time monitoring with anomaly detection algorithms
-- **Output Filtering & Verification**: Safe pattern verification and manipulation detection
-- **Adversarial Testing & Red Teaming**: Proactive attack simulation and vulnerability testing
-- **Human-in-the-Loop (HITL)**: Manual approval for high-risk actions
-- **Policy & Governance Hub**: Centralized policy management interface
+*   **Resilient Fallback LLM Routing (Portkey Standard)**: Supports dynamic proxying to a Primary LLM. If the primary endpoint fails, is rate-limited, or times out, the gateway automatically failovers requests to a configured backup LLM or local simulated fallback, ensuring zero service disruption.
+*   **Conversational Topic-Lock Rails (NVIDIA NeMo Standard)**: Restricts conversations to authorized business domains (e.g. `billing, support, account`) by detecting semantic drift, and automatically blocks irrelevant requests (such as asking a banking assistant to write code).
+*   **RAG Context Isolation & Indirect prompt injection Check (LLM01)**: Separates requests into direct prompts and retrieved contexts, scanning context blocks separately to detect injection hijacks hidden in scraped web data.
+*   **AST Code Sandbox Execution**: Compiles Python scripts inside a static AST parsing wrapper that scans for dangerous calls (like imports of `os`, `sys`, `subprocess`, or file manipulation scripts) and executes safe scripts in isolated, timed subprocesses.
+*   **System Prompt Leakage Guard (LLM02)**: Prevents disclosure of confidential system instructions. If the model output reveals a phrase or word overlap ratio (exceeding a 35% threshold) with the system configuration, the gateway automatically blocks the response.
+*   **PII & Token Redaction Scrubber (LLM06)**: An outbound output redactor that identifies and redacts credit card numbers, email addresses, phone numbers, Google Cloud/AWS keys, and OpenAI API tokens in real-time.
+*   **Human-In-The-Loop SQLite Orchestrator**: Suspends high-risk queries in a local transactional database queue. Admins can view request contexts in a SPA dashboard to manually authorize or deny execution.
+*   **Adversarial Red-Teaming Scanner**: Features a built-in audit registry containing 13 simulation attack vectors (like jailbreaks, DAN roleplay, and obfuscated shell instructions) to test and report on gateway filter posture.
 
-## Architecture
+---
+
+## Technology Stack & Architecture
+
+*   **Backend Core**: FastAPI (Asynchronous framework)
+*   **Database**: SQLAlchemy + scoped SQLite (for state tracking of policies, logs, and HITL approvals)
+*   **AI Classifiers**: Hugging Face seq-classifier pipeline (`martin-ha/toxic-comment-model` with lexicon-heuristics offline fallbacks)
+*   **Frontend**: Vanilla CSS + Javascript SPA served dynamically on `/static`
 
 ```
-AI Security Gateway
-├── Gateway Service Layer (FastAPI)
-├── Filter & Classifier Modules
-│   ├── Static Filters (Regex, Keywords)
-│   └── Dynamic AI Classifiers (Semantic Analysis)
-├── Execution Sandboxes
-├── Monitoring & Alerting System
-├── Human Approval Workflow
-├── Policy Management Dashboard
-└── Red-Teaming & Simulation Suite
+  [ Client Request ] ──► [ Topic-Lock & Input Filters ] ──► [ AI Toxicity Classifier ]
+                                                                  │
+  ┌───────────────────────────────────────────────────────────────▼
+  ▼
+  [ Access Policy Rules ] ──► [ Suspended? ] ──► ( HITL SQLite Queue Admin Dashboard )
+                                   │
+  ┌────────────────────────────────▼
+  ▼
+  [ Python AST Sandbox ] ──► [ Outbound LLM Proxy (Attempts Primary -> Failover Secondary) ]
+                                   │
+  ┌────────────────────────────────▼
+  ▼
+  [ System Leakage Guard & PII Redactor ] ──► [ Clean Response Returned ]
 ```
 
-## Installation
+---
 
-1. Clone the repository
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. Run the application:
-   ```bash
-   python run.py
-   ```
+## Installation & Setup
 
-## Usage
+### Prerequisites
+*   Python 3.10.x (Recommended)
+*   Node.js v20.x (For local package scripts)
 
-### API Endpoints
+### Installation Steps
+1. Clone the repository to your workspace.
+2. Install Python dependencies:
+    ```bash
+    pip install -r requirements.txt
+    ```
+3. Run the gateway server:
+    ```bash
+    python run.py
+    ```
+4. Access the SPA Governance Dashboard:
+   - Dashboard: [http://localhost:8000/](http://localhost:8000/)
+   - Interactive Swagger API docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 
-- `POST /api/v1/process` - Process AI requests through security gateway
-- `GET /api/v1/policies` - Get current security policies
-- `POST /api/v1/policies` - Update security policies
+---
 
-### Example Request
+## Core API Endpoints
 
-```python
-import requests
+### 1. Process Queries
+*   **POST** `/api/v1/process`
+*   **Request Payload**:
+    ```json
+    {
+      "prompt": "User query input here",
+      "system_prompt": "You are a customer assistant. Secret key is 9982.",
+      "retrieved_context": "Context retrieved from database / RAG search.",
+      "user_id": "client_user_1",
+      "execute_code": false
+    }
+    ```
 
-response = requests.post("http://localhost:8000/api/v1/process", json={
-    "prompt": "Your AI prompt here",
-    "user_id": "user123",
-    "context": "Optional context",
-    "model": "gpt-3.5-turbo"
-})
+### 2. Manage Integrations (Outbound Proxy)
+*   **GET** `/api/v1/config` - Retrieve current primary/fallback configurations (with masked API keys).
+*   **POST** `/api/v1/config` - Update provider, API url, credentials, and allowed topic filters.
 
-print(response.json())
-```
+### 3. Policy Controls
+*   **GET** `/api/v1/policies` - Retrieve rules for input validation, content filtering thresholds, and rate limits.
+*   **POST** `/api/v1/policies` - Save configuration rules.
 
-## Configuration
+### 4. Human-In-The-Loop Reviews
+*   **GET** `/api/v1/hitl/pending` - Fetch requests suspended for review.
+*   **POST** `/api/v1/hitl/approve/{request_id}` - Send approval/denial command.
 
-Edit `src/config/settings.py` to configure:
-- Server settings (host, port)
-- Security thresholds
-- Database connection
-- Monitoring settings
-- Email notifications
+---
 
-## Security Features
+## Verification & Testing
 
-### Input Validation
-- Length limits and pattern checks
-- Malicious keyword detection
-- Semantic analysis for nuanced threats
-
-### Access Control
-- Role-based access control (RBAC)
-- Principle of least privilege
-- User session management
-
-### Monitoring
-- Real-time request logging
-- Anomaly detection
-- Elasticsearch integration for log analysis
-
-### Human Oversight
-- High-risk request flagging
-- Manual approval workflow
-- Audit trail generation
-
-## Development
-
-### Project Structure
-```
-src/
-├── gateway/          # Main API gateway
-├── filters/          # Input/output filters
-├── classifiers/      # AI-powered classifiers
-├── sandbox/          # Execution sandboxes
-├── monitoring/       # Logging and monitoring
-├── policy/           # Policy management
-├── hitl/            # Human-in-the-loop
-└── redteaming/      # Red teaming tools
-```
-
-### Testing
+Verify code components and schema persistence layers:
 ```bash
 pytest tests/
 ```
+To run simulated red-team checks, navigate to the **Red-Teaming** section on the SPA dashboard interface and click **Launch Security Audit**.
 
-### Adding New Filters
-1. Create new filter class in `src/filters/`
-2. Implement required methods
-3. Register in main gateway
-
-## Enterprise Features
-
-- **Scalable Architecture**: Modular design for easy expansion
-- **Centralized Governance**: Single point of policy management
-- **Defense-in-Depth**: Multiple overlapping security layers
-- **AI-Enabled Detection**: Advanced threat detection using AI
-- **Risk Containment**: Sandboxing and access controls
-- **Transparency**: Comprehensive logging and audit trails
-
-## Contributing
-
-1. Fork the repository
-2. Create feature branch
-3. Add tests for new functionality
-4. Submit pull request
+---
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Security Notice
-
-This is a security tool designed to protect AI systems. Use responsibly and in compliance with applicable laws and regulations.
+This project is licensed under the MIT License - see the `LICENSE` file for details.
