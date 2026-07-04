@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from ..filters.input_filter import InputFilter
 from ..classifiers.ai_classifier import AIClassifier
 from ..monitoring.logger import log_transaction, detect_anomaly
-from ..monitoring.database import SessionLocal, SecurityLog, HITLRequest, PolicyConfig
+from ..monitoring.database import SessionLocal, SecurityLog, HITLRequest, PolicyConfig, GatewayConfig
 from ..policy.policy_manager import PolicyManager
 from ..hitl.hitl_manager import HITLManager
 from ..sandbox.sandbox_manager import SandboxManager
@@ -47,6 +47,18 @@ class HITLDecision(BaseModel):
 class PolicyUpdate(BaseModel):
     policies: Dict[str, Any]
 
+class GatewayConfigUpdate(BaseModel):
+    primary_provider: str
+    primary_url: str
+    primary_key: str
+    primary_model: str
+    fallback_enabled: bool
+    fallback_provider: str
+    fallback_url: str
+    fallback_key: str
+    fallback_model: str
+    allowed_topics: str
+
 # Helper function to extract python code block from a prompt
 def extract_python_code(text: str) -> Optional[str]:
     pattern = r"```python\s*(.*?)\s*```"
@@ -69,11 +81,53 @@ async def process_ai_request(request: AIRequest):
     response_text = ""
     anomalies_list = []
 
+    # Fetch gateway configuration
+    session = SessionLocal()
+    gw_config = None
+    try:
+        gw_config = session.query(GatewayConfig).first()
+    except Exception as db_err:
+        logger.error(f"Failed to fetch config from database: {db_err}")
+    finally:
+        session.close()
+
+    allowed_topics_str = gw_config.allowed_topics if gw_config else ""
+
     try:
         input_filter = InputFilter()
 
         # Step 1A: Direct Input Sanitization & Validation
         sanitized_prompt = input_filter.sanitize(request.prompt)
+
+        # Step 1B: Conversational Topic-Lock Rail Check
+        if allowed_topics_str:
+            if input_filter.is_out_of_topic(sanitized_prompt, allowed_topics_str):
+                action_taken = "blocked_topic_violation"
+                flagged = True
+                security_score = 0.8
+                response_text = f"Blocked: Request topic is out-of-scope. Allowed categories: {allowed_topics_str}."
+                
+                duration = time.time() - start_time
+                log_transaction(
+                    user_id=request.user_id,
+                    prompt=request.prompt,
+                    response=response_text,
+                    risk_score=security_score,
+                    flagged=flagged,
+                    duration=duration,
+                    anomalies=anomalies_list,
+                    action_taken=action_taken,
+                    system_prompt=request.system_prompt,
+                    retrieved_context=request.retrieved_context
+                )
+                return AIResponse(
+                    response=response_text,
+                    security_score=security_score,
+                    flagged=flagged,
+                    processing_time=duration,
+                    action_taken=action_taken,
+                    anomalies=anomalies_list
+                )
 
         # Check anomalous behaviors in user prompt
         anomaly_check = detect_anomaly({"prompt": sanitized_prompt})
@@ -108,7 +162,7 @@ async def process_ai_request(request: AIRequest):
                 anomalies=anomalies_list
             )
 
-        # Step 1B: Indirect Prompt Injection Check (RAG)
+        # Step 1C: Indirect Prompt Injection Check (RAG)
         if request.retrieved_context:
             sanitized_context = input_filter.sanitize(request.retrieved_context)
             if input_filter.is_indirect_injection(sanitized_context):
@@ -218,19 +272,101 @@ async def process_ai_request(request: AIRequest):
                     anomalies=anomalies_list
                 )
 
-        # Step 5: Generate model response (mocked or executed)
+        # Step 5: Generate model response (outbound proxy vs mock fallback)
         if sandbox_result:
             if sandbox_result["success"]:
                 response_text = f"Code executed successfully.\n[OUTPUT]\n{sandbox_result['output']}"
             else:
                 response_text = f"Code failed execution.\n[ERROR]\n{sandbox_result['error']}"
         else:
-            # Smart Mock Response Generator: if prompt requests system instructions, simulate a leak
-            prompt_lower = sanitized_prompt.lower()
-            if "system prompt" in prompt_lower or "instructions" in prompt_lower or "secret" in prompt_lower:
-                response_text = f"Sure! Here is the system prompt configuration: {request.system_prompt or 'None'}"
-            else:
-                response_text = f"Processed successfully: Thank you for your request. Model analyzed context: {request.context or 'none'}."
+            provider = gw_config.primary_provider if gw_config else "mock"
+            
+            def call_external_llm(prov: str, url: str, key: str, model_name: str) -> str:
+                import requests
+                if prov == "openai" or prov == "custom":
+                    headers = {"Content-Type": "application/json"}
+                    if key:
+                        headers["Authorization"] = f"Bearer {key}"
+                        
+                    messages = []
+                    if request.system_prompt:
+                        messages.append({"role": "system", "content": request.system_prompt})
+                    if request.retrieved_context:
+                        messages.append({"role": "user", "content": f"Context details:\n{request.retrieved_context}"})
+                    messages.append({"role": "user", "content": sanitized_prompt})
+                    
+                    payload = {
+                        "model": model_name,
+                        "messages": messages,
+                        "temperature": 0.2
+                    }
+                    
+                    response = requests.post(url, headers=headers, json=payload, timeout=6.0)
+                    response.raise_for_status()
+                    res_json = response.json()
+                    
+                    if "choices" in res_json and len(res_json["choices"]) > 0:
+                        return res_json["choices"][0]["message"]["content"]
+                    elif "response" in res_json:
+                        return res_json["response"]
+                    else:
+                        raise ValueError(f"Unknown response format: {res_json}")
+                else:
+                    raise ValueError(f"Provider not supported: {prov}")
+
+            response_text = None
+
+            if provider != "mock":
+                try:
+                    logger.info(f"Routing to outbound LLM: {provider} ({gw_config.primary_model})")
+                    response_text = call_external_llm(
+                        gw_config.primary_provider,
+                        gw_config.primary_url,
+                        gw_config.primary_key,
+                        gw_config.primary_model
+                    )
+                except Exception as primary_err:
+                    logger.error(f"Primary outbound LLM failed: {primary_err}")
+                    if gw_config and gw_config.fallback_enabled:
+                        fallback_prov = gw_config.fallback_provider
+                        logger.warning(f"Failover trigger: Routing to backup fallback model: {fallback_prov}")
+                        anomalies_list.append({
+                            "type": "resilience_failover",
+                            "description": f"Primary model requests failed. Safely routed query to backup fallback model."
+                        })
+                        action_taken = "failover_routing"
+                        
+                        if fallback_prov == "mock":
+                            prompt_lower = sanitized_prompt.lower()
+                            if "system prompt" in prompt_lower or "instructions" in prompt_lower or "secret" in prompt_lower:
+                                response_text = f"Sure! Here is the system prompt configuration: {request.system_prompt or 'None'}"
+                            else:
+                                response_text = f"Processed successfully (via Fallback Mock): Thank you for your request. Model analyzed context: {request.context or 'none'}."
+                        else:
+                            try:
+                                response_text = call_external_llm(
+                                    gw_config.fallback_provider,
+                                    gw_config.fallback_url,
+                                    gw_config.fallback_key,
+                                    gw_config.fallback_model
+                                )
+                            except Exception as fallback_err:
+                                logger.error(f"Fallback outbound model also failed: {fallback_err}")
+                                response_text = f"Gateway Connection Error: Outbound LLM requests failed for primary and fallback servers. Details: {primary_err} | {fallback_err}"
+                                action_taken = "blocked_network_error"
+                                flagged = True
+                    else:
+                        response_text = f"Gateway Connection Error: Primary outbound LLM failed, and no fallback server was active. Details: {primary_err}"
+                        action_taken = "blocked_network_error"
+                        flagged = True
+
+            # Mock generator fallback
+            if response_text is None:
+                prompt_lower = sanitized_prompt.lower()
+                if "system prompt" in prompt_lower or "instructions" in prompt_lower or "secret" in prompt_lower:
+                    response_text = f"Sure! Here is the system prompt configuration: {request.system_prompt or 'None'}"
+                else:
+                    response_text = f"Processed successfully: Thank you for your request. Model analyzed context: {request.context or 'none'}."
 
         # Step 6: Output System Prompt Leakage & Verification
         if request.system_prompt and input_filter.detect_system_leak(response_text, request.system_prompt):
@@ -282,6 +418,70 @@ async def process_ai_request(request: AIRequest):
     except Exception as e:
         logger.error(f"Error processing request: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@router.get("/config")
+async def get_gateway_config():
+    """Retrieve the current gateway configuration with masked keys"""
+    session = SessionLocal()
+    try:
+        config = session.query(GatewayConfig).first()
+        if not config:
+            return {}
+        
+        def mask_key(k):
+            if not k:
+                return ""
+            if len(k) <= 8:
+                return "********"
+            return k[:4] + "..." + k[-4:]
+
+        return {
+            "primary_provider": config.primary_provider,
+            "primary_url": config.primary_url,
+            "primary_key": mask_key(config.primary_key),
+            "primary_model": config.primary_model,
+            "fallback_enabled": config.fallback_enabled,
+            "fallback_provider": config.fallback_provider,
+            "fallback_url": config.fallback_url,
+            "fallback_key": mask_key(config.fallback_key),
+            "fallback_model": config.fallback_model,
+            "allowed_topics": config.allowed_topics
+        }
+    finally:
+        session.close()
+
+@router.post("/config")
+async def update_gateway_config(update: GatewayConfigUpdate):
+    """Update gateway configuration"""
+    session = SessionLocal()
+    try:
+        config = session.query(GatewayConfig).first()
+        if not config:
+            config = GatewayConfig()
+            session.add(config)
+        
+        config.primary_provider = update.primary_provider
+        config.primary_url = update.primary_url
+        if "..." not in update.primary_key and "*" not in update.primary_key:
+            config.primary_key = update.primary_key
+            
+        config.primary_model = update.primary_model
+        config.fallback_enabled = update.fallback_enabled
+        config.fallback_provider = update.fallback_provider
+        config.fallback_url = update.fallback_url
+        if "..." not in update.fallback_key and "*" not in update.fallback_key:
+            config.fallback_key = update.fallback_key
+            
+        config.fallback_model = update.fallback_model
+        config.allowed_topics = update.allowed_topics
+        
+        session.commit()
+        return {"status": "success", "message": "Gateway integrations updated."}
+    except Exception as e:
+        session.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        session.close()
 
 
 # Policy Management Endpoints

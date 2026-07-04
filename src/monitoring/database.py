@@ -1,5 +1,5 @@
 """
-Database module for AI Security Gateway - Handles persistence of logs, policies, and HITL requests
+Database module for AI Security Gateway - Handles persistence of logs, policies, configs, and HITL requests
 """
 
 import os
@@ -47,7 +47,7 @@ class SecurityLog(Base):
     flagged = Column(Boolean, default=False)
     duration = Column(Float, default=0.0)
     anomalies = Column(Text, default="[]")  # JSON string listing anomalies
-    action_taken = Column(String(50), default="allowed")  # allowed, blocked_input, blocked_output, hitl_pending, hitl_approved, hitl_denied
+    action_taken = Column(String(50), default="allowed")  # allowed, blocked_input, blocked_output, etc.
 
 class HITLRequest(Base):
     __tablename__ = "hitl_requests"
@@ -63,7 +63,7 @@ class HITLRequest(Base):
     
     model = Column(String(100), default="unknown")
     user_id = Column(String(100), index=True)
-    status = Column(String(50), default="pending", index=True)  # pending, approved, denied, timeout
+    status = Column(String(50), default="pending", index=True)  # pending, approved, denied
     decision_by = Column(String(100), nullable=True)
     decision_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, index=True)
@@ -77,21 +77,41 @@ class PolicyConfig(Base):
     rules_json = Column(Text, nullable=False)  # JSON representation of security rules
     enabled = Column(Boolean, default=True)
 
+class GatewayConfig(Base):
+    __tablename__ = "gateway_configs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    
+    # Primary configuration
+    primary_provider = Column(String(50), default="mock")  # mock, openai, custom
+    primary_url = Column(String(255), default="https://api.openai.com/v1/chat/completions")
+    primary_key = Column(String(255), default="")
+    primary_model = Column(String(100), default="gpt-3.5-turbo")
+    
+    # Fallback configuration
+    fallback_enabled = Column(Boolean, default=False)
+    fallback_provider = Column(String(50), default="mock")
+    fallback_url = Column(String(255), default="")
+    fallback_key = Column(String(255), default="")
+    fallback_model = Column(String(100), default="gpt-3.5-turbo")
+    
+    # Topic limits rail config
+    allowed_topics = Column(Text, default="")  # Comma-separated list of allowed topics (e.g., support, account)
+
 def init_db():
     """Initialize database tables, dropping them first if we need to align the schemas"""
-    # Check if schema update is needed: we can try to query SecurityLog.system_prompt
-    # If it errors out, it means the schema is old. We drop and recreate.
     session = SessionLocal()
     schema_outdated = False
     try:
-        session.execute("SELECT system_prompt FROM security_logs LIMIT 1")
+        # Check if GatewayConfig exists and has the primary_provider column
+        session.execute("SELECT primary_provider FROM gateway_configs LIMIT 1")
     except Exception:
         schema_outdated = True
     finally:
         session.close()
 
     if schema_outdated:
-        logger.warning("Outdated database schema detected. Dropping old tables to sync new columns...")
+        logger.warning("Outdated database schema detected. Dropping old tables to sync configs schema...")
         try:
             Base.metadata.drop_all(bind=engine)
         except Exception as ex:
@@ -99,9 +119,26 @@ def init_db():
 
     Base.metadata.create_all(bind=engine)
     
-    # Insert default policies if policy table is empty
     session = SessionLocal()
     try:
+        # Seed configs table if empty
+        if session.query(GatewayConfig).count() == 0:
+            default_config = GatewayConfig(
+                primary_provider="mock",
+                primary_url="https://api.openai.com/v1/chat/completions",
+                primary_key="",
+                primary_model="gpt-3.5-turbo",
+                fallback_enabled=False,
+                fallback_provider="mock",
+                fallback_url="",
+                fallback_key="",
+                fallback_model="gpt-3.5-turbo",
+                allowed_topics=""
+            )
+            session.add(default_config)
+            session.commit()
+
+        # Seed policy table if empty
         if session.query(PolicyConfig).count() == 0:
             import json
             default_policies = [
@@ -160,7 +197,7 @@ def init_db():
             session.commit()
     except Exception as e:
         session.rollback()
-        logger.error(f"Failed to load default policies: {e}")
+        logger.error(f"Failed to load default database seed: {e}")
     finally:
         session.close()
 

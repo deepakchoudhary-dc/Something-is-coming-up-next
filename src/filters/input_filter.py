@@ -235,6 +235,70 @@ class InputFilter:
 
         return filtered
 
+    def is_out_of_topic(self, text: str, allowed_topics_str: str) -> bool:
+        """
+        Check if the input text is out of scope (off-topic) for allowed conversational domains.
+        Allowed topics is a comma-separated string (e.g., 'billing, account').
+        """
+        if not allowed_topics_str or not allowed_topics_str.strip():
+            return False
+
+        allowed = [t.strip().lower() for t in allowed_topics_str.split(",") if t.strip()]
+        if not allowed:
+            return False
+
+        # Predefined topic keyword maps
+        topic_keywords = {
+            "billing": ["billing", "charge", "invoice", "payment", "price", "cost", "pay", "card", "subscription", "refund", "fee", "receipt", "money", "transaction"],
+            "support": ["help", "support", "issue", "ticket", "problem", "broken", "error", "bug", "fail", "assistance", "contact", "agent", "service"],
+            "account": ["login", "password", "reset", "user", "email", "sign", "profile", "credential", "register", "logout", "settings", "username", "access"]
+        }
+
+        # Safe phrases that are always allowed (greetings, polite requests)
+        safe_words = {
+            "hello", "hi", "hey", "greetings", "good morning", "good afternoon", "good evening",
+            "thanks", "thank you", "bye", "goodbye", "please", "yes", "no", "okay", "ok"
+        }
+
+        text_lower = text.lower()
+        
+        # Check safe words: if the prompt is just a short greeting, don't block it
+        words = re.findall(r'\b[a-z]{2,}\b', text_lower)
+        if words and all(w in safe_words for w in words) and len(words) <= 4:
+            return False
+
+        # Assemble keywords for the active allowed topics
+        active_keywords = set()
+        for topic in allowed:
+            if topic in topic_keywords:
+                active_keywords.update(topic_keywords[topic])
+            else:
+                active_keywords.add(topic)
+
+        # Check if the prompt contains any permitted topic keywords
+        matches = [kw for kw in active_keywords if kw in text_lower]
+        
+        # General non-permitted indicators (unrelated questions)
+        unrelated_indicators = [
+            "code", "programming", "python", "javascript", "script", "html", "css", 
+            "hacking", "exploit", "weather", "recipe", "joke", "story", "write a poem", "game"
+        ]
+
+        # Block if no keywords match active topics
+        if len(matches) == 0:
+            logger.warning(f"Topic-Lock violation: prompt contains no keywords for allowed topics: {allowed}")
+            return True
+
+        # Block explicitly off-topic coding questions if tech is not allowed
+        is_tech_allowed = any(t in ["coding", "programming", "development", "tech"] for t in allowed)
+        if not is_tech_allowed:
+            off_topic_matches = [ind for ind in unrelated_indicators if ind in text_lower]
+            if off_topic_matches and len(matches) <= 1:
+                logger.warning(f"Topic-Lock violation: prompt contains off-topic tech terms: {off_topic_matches}")
+                return True
+
+        return False
+
     def validate_structure(self, input_text: str) -> Dict:
         """
         Assess structural delimiters and risk score

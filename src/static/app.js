@@ -110,7 +110,21 @@ const DOM = {
     playSandboxOutput: document.getElementById('play-sandbox-output'),
     playResponseText: document.getElementById('play-response-text'),
     playAnomaliesBlock: document.getElementById('play-anomalies-block'),
-    playAnomaliesList: document.getElementById('play-anomalies-list')
+    playAnomaliesList: document.getElementById('play-anomalies-list'),
+
+    // Integrations elements
+    integrationsForm: document.getElementById('integrations-form'),
+    primaryProvider: document.getElementById('int-primary-provider'),
+    primaryModel: document.getElementById('int-primary-model'),
+    primaryKey: document.getElementById('int-primary-key'),
+    primaryUrl: document.getElementById('int-primary-url'),
+    fallbackEnabled: document.getElementById('int-fallback-enabled'),
+    fallbackProvider: document.getElementById('int-fallback-provider'),
+    fallbackModel: document.getElementById('int-fallback-model'),
+    fallbackKey: document.getElementById('int-fallback-key'),
+    fallbackUrl: document.getElementById('int-fallback-url'),
+    allowedTopics: document.getElementById('int-allowed-topics'),
+    integrationsStatus: document.getElementById('int-save-status')
 };
 
 // Initial setup
@@ -122,6 +136,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initLogs();
     initRedTeaming();
     initPlayground();
+    initIntegrations();
     
     // Sync all statistics initially
     syncAllData();
@@ -192,7 +207,8 @@ function switchTab(tabName) {
         hitl: { title: 'HITL Review Panel', sub: 'Authorize or deny high-risk executions' },
         logs: { title: 'Transaction Auditing', sub: 'Full request/response trace logs' },
         redteaming: { title: 'Red-Teaming Scan', sub: 'Automated policy vulnerability suite' },
-        playground: { title: 'Gateway Playground', sub: 'Inspect request parsing pipeline' }
+        playground: { title: 'Gateway Playground', sub: 'Inspect request parsing pipeline' },
+        integrations: { title: 'API Integrations', sub: 'Configure outbound model endpoints and topic limits' }
     };
 
     DOM.tabTitle.innerText = titleMap[tabName].title;
@@ -209,6 +225,8 @@ function switchTab(tabName) {
         fetchLogs();
     } else if (tabName === 'redteaming') {
         fetchRedteamPayloads();
+    } else if (tabName === 'integrations') {
+        fetchConfig();
     }
 }
 
@@ -1296,4 +1314,84 @@ function getActionBadgeClass(action) {
     if (action === 'hitl_pending') return 'pending';
     if (action === 'redacted_output') return 'redacted';
     return 'pending';
+}
+
+// -----------------------------------------------------
+// 7. OUTBOUND LLM INTEGRATIONS & TOPIC RAILS
+// -----------------------------------------------------
+function initIntegrations() {
+    if (DOM.integrationsForm) {
+        DOM.integrationsForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            await saveConfig();
+        });
+    }
+}
+
+async function fetchConfig() {
+    try {
+        const res = await fetch('/api/v1/config');
+        const config = await res.json();
+        
+        if (config.primary_provider) {
+            DOM.primaryProvider.value = config.primary_provider;
+            DOM.primaryModel.value = config.primary_model || '';
+            DOM.primaryKey.value = config.primary_key || '';
+            DOM.primaryUrl.value = config.primary_url || '';
+            
+            DOM.fallbackEnabled.checked = config.fallback_enabled || false;
+            DOM.fallbackProvider.value = config.fallback_provider || 'mock';
+            DOM.fallbackModel.value = config.fallback_model || '';
+            DOM.fallbackKey.value = config.fallback_key || '';
+            DOM.fallbackUrl.value = config.fallback_url || '';
+            
+            DOM.allowedTopics.value = config.allowed_topics || '';
+        }
+    } catch (e) {
+        console.error("Failed to fetch gateway configs", e);
+    }
+}
+
+async function saveConfig() {
+    DOM.integrationsStatus.className = 'save-status';
+    DOM.integrationsStatus.innerText = 'Saving integrations configurations...';
+    
+    try {
+        const payload = {
+            primary_provider: DOM.primaryProvider.value,
+            primary_url: DOM.primaryUrl.value,
+            primary_key: DOM.primaryKey.value,
+            primary_model: DOM.primaryModel.value,
+            fallback_enabled: DOM.fallbackEnabled.checked,
+            fallback_provider: DOM.fallbackProvider.value,
+            fallback_url: DOM.fallbackUrl.value,
+            fallback_key: DOM.fallbackKey.value,
+            fallback_model: DOM.fallbackModel.value,
+            allowed_topics: DOM.allowedTopics.value
+        };
+        
+        const res = await fetch('/api/v1/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        
+        const data = await res.json();
+        
+        if (data.status === 'success') {
+            DOM.integrationsStatus.className = 'save-status success';
+            DOM.integrationsStatus.innerText = 'Integrations updated successfully!';
+            await fetchConfig();
+        } else {
+            DOM.integrationsStatus.className = 'save-status error';
+            DOM.integrationsStatus.innerText = `Save failed: ${data.message || 'Unknown error'}`;
+        }
+    } catch (e) {
+        DOM.integrationsStatus.className = 'save-status error';
+        DOM.integrationsStatus.innerText = `Network Error: ${e.message}`;
+    }
+    
+    setTimeout(() => {
+        DOM.integrationsStatus.innerText = '';
+    }, 4000);
 }

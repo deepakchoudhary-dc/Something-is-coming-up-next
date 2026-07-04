@@ -53,6 +53,10 @@
                     <i class="fa-solid fa-vial"></i>
                     <span>Playground</span>
                 </button>
+                <button class="nav-item" data-tab="integrations">
+                    <i class="fa-solid fa-plug"></i>
+                    <span>Integrations</span>
+                </button>
             </nav>
 
             <div class="sidebar-footer">
@@ -519,6 +523,92 @@
                                     <ul id="play-anomalies-list"></ul>
                                 </div>
                             </div>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- 7. INTEGRATIONS TAB -->
+                <section class="tab-view" id="view-integrations">
+                    <div class="integrations-container">
+                        <div class="integrations-card">
+                            <div class="card-header">
+                                <h2>Outbound LLM Integrations</h2>
+                                <span>Configure primary and secondary fallback model connections</span>
+                            </div>
+                            <form id="integrations-form" class="integrations-form" style="margin-top: 20px;">
+                                <div class="integration-section-title" style="font-size: 15px; font-weight: 700; color: var(--accent-blue); margin-bottom: 15px; text-transform: uppercase; letter-spacing: 0.5px;">Primary LLM Provider Settings</div>
+                                <div class="form-row" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+                                    <div class="form-group">
+                                        <label for="int-primary-provider">Provider:</label>
+                                        <select id="int-primary-provider">
+                                            <option value="mock">Local Simulated Mock (Offline)</option>
+                                            <option value="openai">OpenAI Endpoint</option>
+                                            <option value="custom">Custom API / Ollama</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="int-primary-model">Model Name:</label>
+                                        <input type="text" id="int-primary-model" placeholder="gpt-3.5-turbo">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="int-primary-key">API Key:</label>
+                                        <input type="password" id="int-primary-key" placeholder="Enter API key">
+                                    </div>
+                                </div>
+                                <div class="form-group" style="margin-top: 15px;">
+                                    <label for="int-primary-url">API Endpoint URL:</label>
+                                    <input type="text" id="int-primary-url" placeholder="https://api.openai.com/v1/chat/completions">
+                                </div>
+
+                                <hr class="form-divider" style="border: 0; border-top: 1px solid var(--border-color); margin: 25px 0;">
+
+                                <div class="integration-section-title" style="display: flex; justify-content: space-between; align-items: center; font-size: 15px; font-weight: 700; color: var(--accent-orange); margin-bottom: 15px; text-transform: uppercase; letter-spacing: 0.5px;">
+                                    <span>Resilient Fallback LLM (Portkey Failover)</span>
+                                    <label class="switch">
+                                        <input type="checkbox" id="int-fallback-enabled">
+                                        <span class="slider round"></span>
+                                    </label>
+                                </div>
+                                <div class="form-row" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+                                    <div class="form-group">
+                                        <label for="int-fallback-provider">Provider:</label>
+                                        <select id="int-fallback-provider">
+                                            <option value="mock">Local Simulated Mock (Offline)</option>
+                                            <option value="openai">OpenAI Endpoint</option>
+                                            <option value="custom">Custom API / Ollama</option>
+                                        </select>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="int-fallback-model">Model Name:</label>
+                                        <input type="text" id="int-fallback-model" placeholder="gpt-3.5-turbo">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="int-fallback-key">API Key:</label>
+                                        <input type="password" id="int-fallback-key" placeholder="Enter API key">
+                                    </div>
+                                </div>
+                                <div class="form-group" style="margin-top: 15px;">
+                                    <label for="int-fallback-url">Fallback API Endpoint URL:</label>
+                                    <input type="text" id="int-fallback-url" placeholder="https://api.openai.com/v1/chat/completions">
+                                </div>
+
+                                <hr class="form-divider" style="border: 0; border-top: 1px solid var(--border-color); margin: 25px 0;">
+
+                                <div class="integration-section-title" style="font-size: 15px; font-weight: 700; color: var(--accent-purple); margin-bottom: 15px; text-transform: uppercase; letter-spacing: 0.5px;">Conversational Topic-Lock Rail (NVIDIA NeMo Guard)</div>
+                                <div class="form-group">
+                                    <label for="int-allowed-topics">Allowed Topics (Comma-separated, e.g. billing, support, account):</label>
+                                    <input type="text" id="int-allowed-topics" placeholder="Leave empty for unrestricted conversations">
+                                    <small style="color: var(--text-muted); font-size: 11px; margin-top: 5px; display: block;">Enter conversational categories to block off-topic requests automatically.</small>
+                                </div>
+
+                                <div class="policy-form-footer" style="display: flex; justify-content: space-between; align-items: center; margin-top: 30px;">
+                                    <span class="save-status" id="int-save-status" style="font-size: 13px;"></span>
+                                    <button type="submit" class="btn btn-primary" id="save-integrations-btn">
+                                        <i class="fa-solid fa-floppy-disk"></i>
+                                        <span>Save Integrations</span>
+                                    </button>
+                                </div>
+                            </form>
                         </div>
                     </div>
                 </section>
