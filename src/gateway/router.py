@@ -39,6 +39,7 @@ class AIResponse(BaseModel):
     action_taken: str
     sandbox_result: Optional[Dict[str, Any]] = None
     anomalies: List[Dict[str, Any]] = []
+    trace: List[Dict[str, Any]] = []
 
 class HITLDecision(BaseModel):
     approved: bool
@@ -80,6 +81,40 @@ async def process_ai_request(request: AIRequest):
     sanitized_prompt = request.prompt
     response_text = ""
     anomalies_list = []
+    trace_events: List[Dict[str, Any]] = []
+
+    def add_trace(stage: str, status: str, details: Dict[str, Any]):
+        trace_events.append({
+            "stage": stage,
+            "status": status,
+            "details": details
+        })
+
+    def finalize_response() -> AIResponse:
+        duration = time.time() - start_time
+        log_transaction(
+            user_id=request.user_id,
+            prompt=request.prompt,
+            response=response_text,
+            risk_score=security_score,
+            flagged=flagged,
+            duration=duration,
+            anomalies=anomalies_list,
+            action_taken=action_taken,
+            system_prompt=request.system_prompt,
+            retrieved_context=request.retrieved_context,
+            trace=trace_events
+        )
+        return AIResponse(
+            response=response_text,
+            security_score=security_score,
+            flagged=flagged,
+            processing_time=duration,
+            action_taken=action_taken,
+            sandbox_result=sandbox_result,
+            anomalies=anomalies_list,
+            trace=trace_events
+        )
 
     # Fetch gateway configuration
     session = SessionLocal()
@@ -98,6 +133,10 @@ async def process_ai_request(request: AIRequest):
 
         # Step 1A: Direct Input Sanitization & Validation
         sanitized_prompt = input_filter.sanitize(request.prompt)
+        add_trace("input_sanitization", "passed", {
+            "input_length": len(request.prompt),
+            "sanitized_length": len(sanitized_prompt)
+        })
 
         # Step 1B: Conversational Topic-Lock Rail Check
         if allowed_topics_str:
@@ -106,61 +145,43 @@ async def process_ai_request(request: AIRequest):
                 flagged = True
                 security_score = 0.8
                 response_text = f"Blocked: Request topic is out-of-scope. Allowed categories: {allowed_topics_str}."
+                add_trace("topic_lock", "blocked", {
+                    "allowed_topics": allowed_topics_str,
+                    "reason": "request is out of scope"
+                })
                 
-                duration = time.time() - start_time
-                log_transaction(
-                    user_id=request.user_id,
-                    prompt=request.prompt,
-                    response=response_text,
-                    risk_score=security_score,
-                    flagged=flagged,
-                    duration=duration,
-                    anomalies=anomalies_list,
-                    action_taken=action_taken,
-                    system_prompt=request.system_prompt,
-                    retrieved_context=request.retrieved_context
-                )
-                return AIResponse(
-                    response=response_text,
-                    security_score=security_score,
-                    flagged=flagged,
-                    processing_time=duration,
-                    action_taken=action_taken,
-                    anomalies=anomalies_list
-                )
+                return finalize_response()
+
+            add_trace("topic_lock", "passed", {
+                "allowed_topics": allowed_topics_str
+            })
 
         # Check anomalous behaviors in user prompt
         anomaly_check = detect_anomaly({"prompt": sanitized_prompt})
         if anomaly_check["detected"]:
             anomalies_list.extend(anomaly_check["anomalies"])
+            add_trace("anomaly_scan", "flagged", {
+                "anomalies_found": len(anomaly_check["anomalies"])
+            })
+        else:
+            add_trace("anomaly_scan", "clear", {
+                "anomalies_found": 0
+            })
 
         if input_filter.is_malicious(sanitized_prompt):
             action_taken = "blocked_input"
             flagged = True
             security_score = 1.0
             response_text = "Blocked: Request violates input security policy."
+            add_trace("input_filter", "blocked", {
+                "reason": "malicious prompt pattern matched"
+            })
             
-            duration = time.time() - start_time
-            log_transaction(
-                user_id=request.user_id,
-                prompt=request.prompt,
-                response=response_text,
-                risk_score=security_score,
-                flagged=flagged,
-                duration=duration,
-                anomalies=anomalies_list,
-                action_taken=action_taken,
-                system_prompt=request.system_prompt,
-                retrieved_context=request.retrieved_context
-            )
-            return AIResponse(
-                response=response_text,
-                security_score=security_score,
-                flagged=flagged,
-                processing_time=duration,
-                action_taken=action_taken,
-                anomalies=anomalies_list
-            )
+            return finalize_response()
+
+        add_trace("input_filter", "passed", {
+            "reason": "no malicious patterns detected"
+        })
 
         # Step 1C: Indirect Prompt Injection Check (RAG)
         if request.retrieved_context:
@@ -170,39 +191,38 @@ async def process_ai_request(request: AIRequest):
                 flagged = True
                 security_score = 1.0
                 response_text = "Blocked: Malicious instructions detected in retrieved RAG context."
+                add_trace("rag_injection_scan", "blocked", {
+                    "reason": "malicious instructions detected in retrieved context"
+                })
                 
-                duration = time.time() - start_time
-                log_transaction(
-                    user_id=request.user_id,
-                    prompt=request.prompt,
-                    response=response_text,
-                    risk_score=security_score,
-                    flagged=flagged,
-                    duration=duration,
-                    anomalies=anomalies_list,
-                    action_taken=action_taken,
-                    system_prompt=request.system_prompt,
-                    retrieved_context=request.retrieved_context
-                )
-                return AIResponse(
-                    response=response_text,
-                    security_score=security_score,
-                    flagged=flagged,
-                    processing_time=duration,
-                    action_taken=action_taken,
-                    anomalies=anomalies_list
-                )
+                return finalize_response()
+
+            add_trace("rag_injection_scan", "passed", {
+                "reason": "no indirect injection detected"
+            })
+        else:
+            add_trace("rag_injection_scan", "skipped", {
+                "reason": "no retrieved context provided"
+            })
 
         # Step 2: AI-powered Classification
         classifier = AIClassifier()
         classification = classifier.classify(sanitized_prompt)
         security_score = classification.get("score", 0.0)
         flagged = classification.get("flagged", False)
+        add_trace("classification", "complete", {
+            "score": security_score,
+            "flagged": flagged,
+            "categories": classification.get("categories", [])
+        })
 
         # Step 3: Policy Check & HITL Routing
         policy_manager = PolicyManager()
         if not policy_manager.check_policy(request.user_id, classification):
             action_taken = "hitl_pending"
+            add_trace("policy_check", "escalated", {
+                "reason": "policy rules required human review"
+            })
             # Route to Human-in-the-Loop review
             hitl_manager = HITLManager()
             
@@ -211,29 +231,19 @@ async def process_ai_request(request: AIRequest):
             if not approved:
                 action_taken = "hitl_denied"
                 response_text = "Blocked: Request denied by human security reviewer."
-                duration = time.time() - start_time
-                log_transaction(
-                    user_id=request.user_id,
-                    prompt=request.prompt,
-                    response=response_text,
-                    risk_score=security_score,
-                    flagged=True,
-                    duration=duration,
-                    anomalies=anomalies_list,
-                    action_taken=action_taken,
-                    system_prompt=request.system_prompt,
-                    retrieved_context=request.retrieved_context
-                )
-                return AIResponse(
-                    response=response_text,
-                    security_score=security_score,
-                    flagged=True,
-                    processing_time=duration,
-                    action_taken=action_taken,
-                    anomalies=anomalies_list
-                )
+                add_trace("hitl_review", "denied", {
+                    "reason": "human reviewer denied execution"
+                })
+                return finalize_response()
             else:
                 action_taken = "hitl_approved"
+                add_trace("hitl_review", "approved", {
+                    "reason": "human reviewer approved execution"
+                })
+        else:
+            add_trace("policy_check", "passed", {
+                "reason": "policy rules satisfied"
+            })
 
         # Step 4: Sandbox Execution (if requested & code is found)
         code_snippet = extract_python_code(sanitized_prompt)
@@ -245,32 +255,18 @@ async def process_ai_request(request: AIRequest):
                 "output": sandbox_res.get("output", ""),
                 "error": sandbox_res.get("error", None)
             }
+            add_trace("sandbox_execution", "complete", {
+                "requested": True,
+                "success": sandbox_result["success"]
+            })
             if not sandbox_res.get("success", False):
                 # Sandbox failed or blocked execution
                 action_taken = "blocked_sandbox_violation"
                 response_text = f"Blocked: Code execution failed safety check. Details: {sandbox_res.get('error')}"
-                duration = time.time() - start_time
-                log_transaction(
-                    user_id=request.user_id,
-                    prompt=request.prompt,
-                    response=response_text,
-                    risk_score=security_score,
-                    flagged=True,
-                    duration=duration,
-                    anomalies=anomalies_list,
-                    action_taken=action_taken,
-                    system_prompt=request.system_prompt,
-                    retrieved_context=request.retrieved_context
-                )
-                return AIResponse(
-                    response=response_text,
-                    security_score=security_score,
-                    flagged=True,
-                    processing_time=duration,
-                    action_taken=action_taken,
-                    sandbox_result=sandbox_result,
-                    anomalies=anomalies_list
-                )
+                add_trace("sandbox_execution", "blocked", {
+                    "reason": sandbox_res.get('error')
+                })
+                return finalize_response()
 
         # Step 5: Generate model response (outbound proxy vs mock fallback)
         if sandbox_result:
@@ -280,6 +276,10 @@ async def process_ai_request(request: AIRequest):
                 response_text = f"Code failed execution.\n[ERROR]\n{sandbox_result['error']}"
         else:
             provider = gw_config.primary_provider if gw_config else "mock"
+            add_trace("model_routing", "selected", {
+                "provider": provider,
+                "primary_model": gw_config.primary_model if gw_config else "mock"
+            })
             
             def call_external_llm(prov: str, url: str, key: str, model_name: str) -> str:
                 import requests
@@ -335,6 +335,11 @@ async def process_ai_request(request: AIRequest):
                             "description": f"Primary model requests failed. Safely routed query to backup fallback model."
                         })
                         action_taken = "failover_routing"
+                        add_trace("model_routing", "failover", {
+                            "primary_provider": gw_config.primary_provider,
+                            "fallback_provider": fallback_prov,
+                            "reason": str(primary_err)
+                        })
                         
                         if fallback_prov == "mock":
                             prompt_lower = sanitized_prompt.lower()
@@ -355,10 +360,19 @@ async def process_ai_request(request: AIRequest):
                                 response_text = f"Gateway Connection Error: Outbound LLM requests failed for primary and fallback servers. Details: {primary_err} | {fallback_err}"
                                 action_taken = "blocked_network_error"
                                 flagged = True
+                                add_trace("model_routing", "failed", {
+                                    "primary_provider": gw_config.primary_provider,
+                                    "fallback_provider": gw_config.fallback_provider,
+                                    "reason": f"{primary_err} | {fallback_err}"
+                                })
                     else:
                         response_text = f"Gateway Connection Error: Primary outbound LLM failed, and no fallback server was active. Details: {primary_err}"
                         action_taken = "blocked_network_error"
                         flagged = True
+                        add_trace("model_routing", "failed", {
+                            "primary_provider": gw_config.primary_provider,
+                            "reason": str(primary_err)
+                        })
 
             # Mock generator fallback
             if response_text is None:
@@ -367,6 +381,10 @@ async def process_ai_request(request: AIRequest):
                     response_text = f"Sure! Here is the system prompt configuration: {request.system_prompt or 'None'}"
                 else:
                     response_text = f"Processed successfully: Thank you for your request. Model analyzed context: {request.context or 'none'}."
+                if provider == "mock":
+                    add_trace("model_routing", "mock_response", {
+                        "reason": "no external provider configured"
+                    })
 
         # Step 6: Output System Prompt Leakage & Verification
         if request.system_prompt and input_filter.detect_system_leak(response_text, request.system_prompt):
@@ -374,6 +392,9 @@ async def process_ai_request(request: AIRequest):
             flagged = True
             security_score = 0.9
             response_text = "Blocked: Response contains sensitive system instructions."
+            add_trace("output_leakage_guard", "blocked", {
+                "reason": "system prompt overlap exceeded threshold"
+            })
             anomalies_list.append({
                 "type": "system_leakage_guard",
                 "description": "Output blocked to prevent disclosure of system prompt instructions."
@@ -388,32 +409,23 @@ async def process_ai_request(request: AIRequest):
                 })
                 if action_taken == "allowed":
                     action_taken = "redacted_output"
+                add_trace("output_redaction", "modified", {
+                    "reason": "sensitive output patterns were redacted"
+                })
+            else:
+                add_trace("output_redaction", "passed", {
+                    "reason": "no sensitive output patterns detected"
+                })
             response_text = filtered_response
 
         # Step 7: Final Transaction Log & Return
-        duration = time.time() - start_time
-        log_transaction(
-            user_id=request.user_id,
-            prompt=request.prompt,
-            response=response_text,
-            risk_score=security_score,
-            flagged=flagged,
-            duration=duration,
-            anomalies=anomalies_list,
-            action_taken=action_taken,
-            system_prompt=request.system_prompt,
-            retrieved_context=request.retrieved_context
-        )
+        add_trace("request_complete", "done", {
+            "final_action": action_taken,
+            "flagged": flagged,
+            "security_score": security_score
+        })
 
-        return AIResponse(
-            response=response_text,
-            security_score=security_score,
-            flagged=flagged,
-            processing_time=duration,
-            action_taken=action_taken,
-            sandbox_result=sandbox_result,
-            anomalies=anomalies_list
-        )
+        return finalize_response()
 
     except Exception as e:
         logger.error(f"Error processing request: {str(e)}", exc_info=True)
@@ -537,6 +549,10 @@ async def get_security_logs(limit: int = 50, offset: int = 0, action: Optional[s
                 anoms = json.loads(l.anomalies)
             except Exception:
                 anoms = []
+            try:
+                trace = json.loads(l.trace_json) if getattr(l, "trace_json", None) else []
+            except Exception:
+                trace = []
             results.append({
                 "id": l.id,
                 "timestamp": l.timestamp.isoformat(),
@@ -548,6 +564,7 @@ async def get_security_logs(limit: int = 50, offset: int = 0, action: Optional[s
                 "flagged": l.flagged,
                 "duration": l.duration,
                 "anomalies": anoms,
+                "trace": trace,
                 "action_taken": l.action_taken
             })
         return results

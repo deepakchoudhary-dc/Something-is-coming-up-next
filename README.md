@@ -13,6 +13,7 @@ A production-grade, highly resilient **AI Security Gateway** acting as an active
 *   **System Prompt Leakage Guard (LLM02)**: Prevents disclosure of confidential system instructions. If the model output reveals a phrase or word overlap ratio (exceeding a 35% threshold) with the system configuration, the gateway automatically blocks the response.
 *   **PII & Token Redaction Scrubber (LLM06)**: An outbound output redactor that identifies and redacts credit card numbers, email addresses, phone numbers, Google Cloud/AWS keys, and OpenAI API tokens in real-time.
 *   **Human-In-The-Loop SQLite Orchestrator**: Suspends high-risk queries in a local transactional database queue. Admins can view request contexts in a SPA dashboard to manually authorize or deny execution.
+*   **Gateway Decision Traceability**: Captures a structured step-by-step trace for each request so operators can inspect why a prompt was allowed, blocked, escalated to HITL, or routed through fallback.
 *   **Adversarial Red-Teaming Scanner**: Features a built-in audit registry containing 13 simulation attack vectors (like jailbreaks, DAN roleplay, and obfuscated shell instructions) to test and report on gateway filter posture.
 
 ---

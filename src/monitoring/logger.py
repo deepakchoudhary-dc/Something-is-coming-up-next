@@ -51,7 +51,8 @@ class SecurityLogger:
         action_taken: str,
         client_ip: Optional[str] = "127.0.0.1",
         system_prompt: Optional[str] = None,
-        retrieved_context: Optional[str] = None
+        retrieved_context: Optional[str] = None,
+        trace: Optional[List[Dict]] = None
     ):
         """
         Log a complete security transaction to the SQLite database
@@ -66,6 +67,7 @@ class SecurityLogger:
             "flagged": flagged,
             "duration": duration,
             "anomalies": anomalies,
+            "trace_steps": len(trace) if trace else 0,
             "action_taken": action_taken
         }
         logger.info(f"Gateway Transaction: {json.dumps(log_entry)}")
@@ -83,6 +85,7 @@ class SecurityLogger:
                 flagged=flagged,
                 duration=duration,
                 anomalies=json.dumps(anomalies),
+                trace_json=json.dumps(trace or []),
                 action_taken=action_taken,
                 client_ip=client_ip,
                 timestamp=datetime.utcnow()
@@ -205,11 +208,12 @@ def log_transaction(
     action_taken: str,
     client_ip: Optional[str] = "127.0.0.1",
     system_prompt: Optional[str] = None,
-    retrieved_context: Optional[str] = None
+    retrieved_context: Optional[str] = None,
+    trace: Optional[List[Dict]] = None
 ):
     """Convenience function to log a complete transaction"""
     security_logger.log_transaction(
-        user_id, prompt, response, risk_score, flagged, duration, anomalies, action_taken, client_ip, system_prompt, retrieved_context
+        user_id, prompt, response, risk_score, flagged, duration, anomalies, action_taken, client_ip, system_prompt, retrieved_context, trace
     )
 
 def log_anomaly(anomaly_data: Dict[str, Any]):

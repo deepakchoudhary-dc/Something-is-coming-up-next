@@ -899,6 +899,18 @@ window.viewLogDetail = function(logId) {
         </li>
     `).join('');
 
+    const traceList = (log.trace || []).map(step => `
+        <li style="margin-bottom: 10px;">
+            <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 4px;">
+                <span class="badge-status ${step.status === 'blocked' ? 'blocked' : step.status === 'failover' ? 'warning' : 'allowed'}">${escapeHtml(step.stage || 'step')}</span>
+                <strong>${escapeHtml(step.status || 'info')}</strong>
+            </div>
+            <div style="padding-left: 4px; color: var(--text-secondary);">
+                ${escapeHtml(JSON.stringify(step.details || {}, null, 2))}
+            </div>
+        </li>
+    `).join('');
+
     DOM.logModalBody.innerHTML = `
         <div class="modal-details-grid">
             <div class="modal-meta-row">
@@ -930,6 +942,13 @@ window.viewLogDetail = function(logId) {
                 <div class="modal-row-item">
                     <span>Flagged Anomalies</span>
                     <ul style="list-style: none; padding-left: 0;">${anomaliesList}</ul>
+                </div>
+            ` : ''}
+
+            ${traceList ? `
+                <div class="modal-row-item">
+                    <span>Gateway Decision Trace</span>
+                    <ul style="list-style: none; padding-left: 0;">${traceList}</ul>
                 </div>
             ` : ''}
             

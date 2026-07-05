@@ -47,6 +47,7 @@ class SecurityLog(Base):
     flagged = Column(Boolean, default=False)
     duration = Column(Float, default=0.0)
     anomalies = Column(Text, default="[]")  # JSON string listing anomalies
+    trace_json = Column(Text, default="[]")  # JSON string listing gateway trace events
     action_taken = Column(String(50), default="allowed")  # allowed, blocked_input, blocked_output, etc.
 
 class HITLRequest(Base):
@@ -105,6 +106,7 @@ def init_db():
     try:
         # Check if GatewayConfig exists and has the primary_provider column
         session.execute("SELECT primary_provider FROM gateway_configs LIMIT 1")
+        session.execute("SELECT trace_json FROM security_logs LIMIT 1")
     except Exception:
         schema_outdated = True
     finally:
