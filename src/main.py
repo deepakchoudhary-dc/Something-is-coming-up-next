@@ -1,6 +1,6 @@
 """
 AI Security Gateway - Main Application
-A centralized defense layer for securing AI-driven interactions.
+A centralized defense layer for securing AI-driven interactions
 """
 
 from fastapi import FastAPI

@@ -1,5 +1,5 @@
 """
-Human-in-the-Loop (HITL) Management Module - Connected to SQLite database
+Human-in-the-Loop (HITL) Management Module - Connected to SQLite database Locally
 """
 
 import asyncio

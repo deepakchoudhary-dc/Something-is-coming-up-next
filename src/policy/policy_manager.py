@@ -1,12 +1,16 @@
 """
-Policy Management Module - Connected to SQLite database
+Policy Management Module - Connected to SQLite database Locally
 """
 
 import json
+import logging
+from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
-from ..monitoring.database import SessionLocal, PolicyConfig
+from ..monitoring.database import SessionLocal, PolicyConfig, SecurityLog
 from ..config.settings import settings
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class Policy:
@@ -249,3 +253,122 @@ class PolicyManager:
         finally:
             session.close()
         return False
+
+    def check_rate_limit(self, user_id: str) -> Dict[str, Any]:
+        """
+        Check if the user has exceeded their rate limits based on security logs.
+        """
+        # Admin / scanner bypasses all rate limiting
+        if "admin" in user_id.lower() or user_id == "red_team_scanner":
+            return {"allowed": True}
+
+        # Reload latest policies
+        self.policies = self._load_policies()
+
+        rate_policy = self.policies.get("rate_limiting")
+        if not rate_policy or not rate_policy.enabled:
+            return {"allowed": True}
+
+        rpm_limit = rate_policy.rules.get("requests_per_minute", 60)
+        rph_limit = rate_policy.rules.get("requests_per_hour", 1000)
+
+        now = datetime.utcnow()
+        session = SessionLocal()
+        try:
+            # 1. Count requests in the last minute
+            one_min_ago = now - timedelta(minutes=1)
+            rpm_count = session.query(SecurityLog).filter(
+                SecurityLog.user_id == user_id,
+                SecurityLog.timestamp >= one_min_ago,
+                SecurityLog.action_taken != "blocked_rate_limit"
+            ).count()
+
+            if rpm_count >= rpm_limit:
+                logger.warning(f"Rate limit exceeded (RPM) for user '{user_id}': {rpm_count}/{rpm_limit}")
+                return {
+                    "allowed": False,
+                    "reason": f"Rate limit exceeded: maximum {rpm_limit} requests per minute. Current: {rpm_count}."
+                }
+
+            # 2. Count requests in the last hour
+            one_hour_ago = now - timedelta(hours=1)
+            rph_count = session.query(SecurityLog).filter(
+                SecurityLog.user_id == user_id,
+                SecurityLog.timestamp >= one_hour_ago,
+                SecurityLog.action_taken != "blocked_rate_limit"
+            ).count()
+
+            if rph_count >= rph_limit:
+                logger.warning(f"Rate limit exceeded (RPH) for user '{user_id}': {rph_count}/{rph_limit}")
+                return {
+                    "allowed": False,
+                    "reason": f"Rate limit exceeded: maximum {rph_limit} requests per hour. Current: {rph_count}."
+                }
+        except Exception as e:
+            logger.error(f"Error querying rate limits in database: {e}")
+        finally:
+            session.close()
+
+        return {"allowed": True}
+
+    def check_user_access(self, user_id: str, requested_model: Optional[str]) -> Dict[str, Any]:
+        """
+        Check if user complies with daily request quotas and model restrictions.
+        """
+        # Admin / scanner bypasses all access checks
+        if "admin" in user_id.lower() or user_id == "red_team_scanner":
+            return {"allowed": True}
+
+        # Reload latest policies
+        self.policies = self._load_policies()
+
+        user_policy = self.policies.get("user_access")
+        if not user_policy or not user_policy.enabled:
+            return {"allowed": True}
+
+        roles_config = user_policy.rules.get("roles", {})
+
+        # Determine user role
+        role = "user"
+        if "guest" in user_id.lower():
+            role = "guest"
+
+        role_rules = roles_config.get(role, {})
+
+        # Check model restrictions (guest user restricted models check)
+        if role_rules.get("restricted_models", False) and requested_model:
+            premium_keywords = ["gpt-4", "gpt4", "claude-3", "claude3", "gemini-1.5", "gemini1.5", "opus"]
+            is_premium = any(kw in requested_model.lower() for kw in premium_keywords)
+            if is_premium:
+                logger.warning(f"Access restriction: user '{user_id}' with role '{role}' requested restricted model: {requested_model}")
+                return {
+                    "allowed": False,
+                    "reason": f"Access denied: role '{role}' is restricted from accessing model '{requested_model}'."
+                }
+
+        # Check total request quota
+        max_requests = role_rules.get("max_requests")
+        if max_requests is not None:
+            now = datetime.utcnow()
+            twenty_four_hours_ago = now - timedelta(hours=24)
+            session = SessionLocal()
+            try:
+                daily_count = session.query(SecurityLog).filter(
+                    SecurityLog.user_id == user_id,
+                    SecurityLog.timestamp >= twenty_four_hours_ago,
+                    SecurityLog.action_taken != "blocked_rate_limit",
+                    SecurityLog.action_taken != "blocked_access_violation"
+                ).count()
+
+                if daily_count >= max_requests:
+                    logger.warning(f"Daily quota exceeded for user '{user_id}' (role '{role}'): {daily_count}/{max_requests}")
+                    return {
+                        "allowed": False,
+                        "reason": f"Access quota exceeded for role '{role}': maximum {max_requests} requests per 24 hours. Current: {daily_count}."
+                    }
+            except Exception as e:
+                logger.error(f"Error querying user access quotas in database: {e}")
+            finally:
+                session.close()
+
+        return {"allowed": True}

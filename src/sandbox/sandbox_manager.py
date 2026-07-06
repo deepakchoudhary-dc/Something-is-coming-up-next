@@ -18,7 +18,7 @@ class SandboxManager:
 
     def execute_code(self, code: str, language: str = "python") -> Dict[str, Any]:
         """
-        Execute code in a sandboxed environment after validation
+        Execute code in a sandboxed environment after validation from the user
         """
         if not code.strip():
             return {

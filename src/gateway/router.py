@@ -129,6 +129,50 @@ async def process_ai_request(request: AIRequest):
     allowed_topics_str = gw_config.allowed_topics if gw_config else ""
 
     try:
+        policy_manager = PolicyManager()
+
+        # Step 0A: Rate Limiting Check
+        rate_limit_result = policy_manager.check_rate_limit(request.user_id)
+        if not rate_limit_result.get("allowed", True):
+            action_taken = "blocked_rate_limit"
+            flagged = True
+            security_score = 0.5
+            response_text = rate_limit_result.get("reason", "Blocked: Rate limit exceeded.")
+            add_trace("rate_limiting", "blocked", {
+                "user_id": request.user_id,
+                "reason": response_text
+            })
+            anomalies_list.append({
+                "type": "rate_limiting_violation",
+                "description": response_text
+            })
+            return finalize_response()
+
+        add_trace("rate_limiting", "passed", {
+            "user_id": request.user_id
+        })
+
+        # Step 0B: User Access & Model Restriction Check
+        access_result = policy_manager.check_user_access(request.user_id, request.model)
+        if not access_result.get("allowed", True):
+            action_taken = "blocked_access_violation"
+            flagged = True
+            security_score = 0.6
+            response_text = access_result.get("reason", "Blocked: Access policy violation.")
+            add_trace("user_access", "blocked", {
+                "user_id": request.user_id,
+                "reason": response_text
+            })
+            anomalies_list.append({
+                "type": "user_access_violation",
+                "description": response_text
+            })
+            return finalize_response()
+
+        add_trace("user_access", "passed", {
+            "user_id": request.user_id
+        })
+
         input_filter = InputFilter()
 
         # Step 1A: Direct Input Sanitization & Validation

@@ -1,5 +1,5 @@
 """
-Database module for AI Security Gateway - Handles persistence of logs, policies, configs, and HITL requests
+Database module for AI Security Gateway -- Handles persistence of logs, policies, configs, and HITL requests
 """
 
 import os
@@ -107,6 +107,7 @@ def init_db():
         # Check if GatewayConfig exists and has the primary_provider column
         session.execute("SELECT primary_provider FROM gateway_configs LIMIT 1")
         session.execute("SELECT trace_json FROM security_logs LIMIT 1")
+        session.execute("SELECT system_prompt FROM security_logs LIMIT 1")
     except Exception:
         schema_outdated = True
     finally:
