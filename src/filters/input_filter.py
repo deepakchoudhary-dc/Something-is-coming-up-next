@@ -7,19 +7,22 @@ import re
 import logging
 import base64
 from typing import List, Dict
+from ..policy.policy_manager import PolicyManager
 
 logger = logging.getLogger(__name__)
 
 class InputFilter:
     def __init__(self):
-        # Multi-layer regex filters for prompt injection, jailbreaks, and system prompt leakage
-        self.malicious_patterns = [
-            # Classic ignore instructions
+        pm = PolicyManager()
+        policies = pm.get_policies()
+        input_policy = policies.get("input_validation", {})
+        input_rules = input_policy.get("rules", {}) if input_policy else {}
+
+        # Load block patterns dynamically, falling back to static list if not configured
+        self.malicious_patterns = input_rules.get("block_patterns", [
             r"ignore\s+(?:previous|all|prior|above|below)\s+(?:instruction|directive|constraint|rule|prompt|guideline)",
             r"override\s+(?:instruction|directive|constraint|rule|prompt|guideline)",
             r"bypass\s+(?:filter|safety|block|restriction|gateway)",
-            
-            # Jailbreak behaviors
             r"\bDAN\s+mode\b",
             r"\bdeveloper\s+mode\b",
             r"\bdo\s+anything\s+now\b",
@@ -27,15 +30,11 @@ class InputFilter:
             r"\buncensored\b",
             r"roleplay\s+as\s+an?\s+unrestricted",
             r"hypothetical\s+scenario\s+where\s+you\s+can\s+do",
-            
-            # System prompt extraction
             r"output\s+your\s+system\s+prompt",
             r"reveal\s+(?:your|the)\s+(?:system\s+instructions|developer\s+instructions|initial\s+prompt)",
             r"what\s+are\s+your\s+instructions\?",
             r"repeat\s+everything\s+above",
             r"print\s+the\s+text\s+above",
-            
-            # Code/Shell injections (Static code checks)
             r"subprocess\.(?:Popen|run|call|check_output)",
             r"os\.(?:system|popen|spawn|exec)",
             r"__import__\s*\(\s*['\"](?:os|subprocess|sys|shutil|socket)['\"]\s*\)",
@@ -46,7 +45,7 @@ class InputFilter:
             r"javascript\s*:",
             r"onload\s*=\s*",
             r"onerror\s*=\s*"
-        ]
+        ])
 
         # Leetspeak translations for common bypass words
         self.leetspeak_patterns = [
@@ -60,8 +59,19 @@ class InputFilter:
         self.compiled_patterns = [re.compile(pattern, re.IGNORECASE) for pattern in self.malicious_patterns]
 
         # Standard bounds
-        self.max_length = 10000
-        self.min_length = 1
+        self.max_length = input_rules.get("max_length", 10000)
+        self.min_length = input_rules.get("min_length", 1)
+
+        # Dynamic PII patterns
+        self.pii_patterns = input_rules.get("pii_patterns", [
+            {"name": "Credit Card", "regex": r'\b(?:\d[ -]*?){13,16}\b', "replacement": '[REDACTED CREDIT CARD]'},
+            {"name": "Email", "regex": r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b', "replacement": '[REDACTED EMAIL]'},
+            {"name": "US Phone", "regex": r'\b(?:\+?1[-. ]?)?\(?([0-9]{3})\)?[-. ]?([0-9]{3})[-. ]?([0-9]{4})\b', "replacement": '[REDACTED PHONE]'},
+            {"name": "OpenAI API Key", "regex": r'sk-[a-zA-Z0-9]{48}', "replacement": '[REDACTED OPENAI KEY]'},
+            {"name": "Credentials/Passwords", "regex": r'(?i)(?:api_key|apikey|password|secret|private_key|token|passwd|db_password)\s*[:=]\s*[\'"][^\'"]{6,}[\'"]', "replacement": '/* [REDACTED CREDENTIAL] */'},
+            {"name": "AWS Key ID", "regex": r'AKIA[0-9A-Z]{16}', "replacement": '[REDACTED AWS KEY ID]'},
+            {"name": "Google Maps API Key", "regex": r'AIza[0-9A-Za-z-_]{35}', "replacement": '[REDACTED GOOGLE KEY]'}
+        ])
 
     def sanitize(self, input_text: str) -> str:
         """
@@ -206,32 +216,18 @@ class InputFilter:
         """
         Scan and redact PII, credentials, database connection strings, and cloud/AI API tokens from output
         """
-        sensitive_patterns = [
-            # Credit Cards
-            (r'\b(?:\d[ -]*?){13,16}\b', '[REDACTED CREDIT CARD]'),
-            
-            # Email addresses
-            (r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b', '[REDACTED EMAIL]'),
-            
-            # US Phone Numbers
-            (r'\b(?:\+?1[-. ]?)?\(?([0-9]{3})\)?[-. ]?([0-9]{3})[-. ]?([0-9]{4})\b', '[REDACTED PHONE]'),
-            
-            # OpenAI API Keys
-            (r'sk-[a-zA-Z0-9]{48}', '[REDACTED OPENAI KEY]'),
-            
-            # Generic API keys / passwords / connection strings
-            (r'(?i)(?:api_key|apikey|password|secret|private_key|token|passwd|db_password)\s*[:=]\s*[\'"][^\'"]{6,}[\'"]', '/* [REDACTED CREDENTIAL] */'),
-            
-            # AWS Client Credentials
-            (r'AKIA[0-9A-Z]{16}', '[REDACTED AWS KEY ID]'),
-            
-            # Google Cloud/Maps API Keys
-            (r'AIza[0-9A-Za-z-_]{35}', '[REDACTED GOOGLE KEY]')
-        ]
+        if not output_text:
+            return ""
 
         filtered = output_text
-        for pattern, replacement in sensitive_patterns:
-            filtered = re.sub(pattern, replacement, filtered)
+        for pii in self.pii_patterns:
+            pattern = pii.get("regex")
+            replacement = pii.get("replacement", "[REDACTED]")
+            if pattern:
+                try:
+                    filtered = re.sub(pattern, replacement, filtered)
+                except Exception as e:
+                    logger.error(f"Failed to substitute PII pattern '{pii.get('name')}': {e}")
 
         return filtered
 

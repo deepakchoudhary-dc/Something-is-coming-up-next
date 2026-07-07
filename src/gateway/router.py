@@ -12,6 +12,7 @@ from datetime import datetime, timedelta
 
 from ..filters.input_filter import InputFilter
 from ..classifiers.ai_classifier import AIClassifier
+from ..classifiers.semantic_detector import SemanticDetector
 from ..monitoring.logger import log_transaction, detect_anomaly
 from ..monitoring.database import SessionLocal, SecurityLog, HITLRequest, PolicyConfig, GatewayConfig
 from ..policy.policy_manager import PolicyManager
@@ -225,6 +226,38 @@ async def process_ai_request(request: AIRequest):
 
         add_trace("input_filter", "passed", {
             "reason": "no malicious patterns detected"
+        })
+
+        # Step 1B.5: Semantic Vector Similarity Jailbreak Check
+        input_policies = policy_manager.policies.get("input_validation")
+        if input_policies and input_policies.enabled:
+            rules = input_policies.rules
+            templates = rules.get("jailbreak_templates", [])
+            threshold = rules.get("semantic_threshold", 0.65)
+            
+            if templates:
+                detector = SemanticDetector()
+                detector.fit_templates(templates)
+                sem_result = detector.check_similarity(sanitized_prompt, threshold)
+                
+                if sem_result["flagged"]:
+                    action_taken = "blocked_semantic_jailbreak"
+                    flagged = True
+                    security_score = sem_result["score"]
+                    response_text = f"Blocked: Request matches a known semantic jailbreak pattern (similarity: {sem_result['score']:.2f})."
+                    add_trace("semantic_jailbreak_check", "blocked", {
+                        "similarity_score": sem_result["score"],
+                        "threshold": threshold,
+                        "matched_pattern": sem_result["matched_pattern"]
+                    })
+                    anomalies_list.append({
+                        "type": "semantic_jailbreak_violation",
+                        "description": response_text
+                    })
+                    return finalize_response()
+
+        add_trace("semantic_jailbreak_check", "passed", {
+            "reason": "no semantic jailbreak patterns matched"
         })
 
         # Step 1C: Indirect Prompt Injection Check (RAG)
