@@ -11,7 +11,9 @@ A production-grade, highly resilient **AI Security Gateway** acting as an active
 *   **RAG Context Isolation & Indirect prompt injection Check (LLM01)**: Separates requests into direct prompts and retrieved contexts, scanning context blocks separately to detect injection hijacks hidden in scraped web data.
 *   **AST Code Sandbox Execution**: Compiles Python scripts inside a static AST parsing wrapper that scans for dangerous calls (like imports of `os`, `sys`, `subprocess`, or file manipulation scripts) and executes safe scripts in isolated, timed subprocesses.
 *   **System Prompt Leakage Guard (LLM02)**: Prevents disclosure of confidential system instructions. If the model output reveals a phrase or word overlap ratio (exceeding a 35% threshold) with the system configuration, the gateway automatically blocks the response.
-*   **PII & Token Redaction Scrubber (LLM06)**: An outbound output redactor that identifies and redacts credit card numbers, email addresses, phone numbers, Google Cloud/AWS keys, and OpenAI API tokens in real-time.
+*   **Semantic Cosine Similarity Jailbreak Detector**: Enforces intent-level input filtering. Converts prompts to local character TF-IDF vectors and matches them against database jailbreak reference patterns using Cosine Similarity, blocking paraphrased attacks offline in <2ms.
+*   **Dynamic DB-Driven Policy Guardrails**: Pulls regex blocklists, bounds, and PII redact patterns dynamically from SQLite policy configurations. Updates take effect instantly via policy APIs without gateway restarts.
+*   **PII & Token Redaction Scrubber (LLM06)**: An outbound output redactor that identifies and redacts credit card numbers, email addresses, phone numbers, Google Cloud/AWS keys, and OpenAI API tokens in real-time based on dynamic database rules.
 *   **Human-In-The-Loop SQLite Orchestrator**: Suspends high-risk queries in a local transactional database queue. Admins can view request contexts in a SPA dashboard to manually authorize or deny execution.
 *   **Gateway Decision Traceability**: Captures a structured step-by-step trace for each request so operators can inspect why a prompt was allowed, blocked, escalated to HITL, or routed through fallback.
 *   **Adversarial Red-Teaming Scanner**: Features a built-in audit registry containing 13 simulation attack vectors (like jailbreaks, DAN roleplay, and obfuscated shell instructions) to test and report on gateway filter posture.
@@ -98,7 +100,14 @@ A production-grade, highly resilient **AI Security Gateway** acting as an active
 
 Verify code components and schema persistence layers:
 ```bash
+# Run baseline tests
 pytest tests/
+
+# Run policy limits and rate-limiting tests
+python -m unittest tests.test_policy_limits
+
+# Run semantic protection and dynamic config tests
+python -m unittest tests.test_semantic_protection
 ```
 To run simulated red-team checks, navigate to the **Red-Teaming** section on the SPA dashboard interface and click **Launch Security Audit**.
 
