@@ -81,8 +81,8 @@ class InputFilter:
         if not input_text:
             return ""
 
-        # Remove null bytes and control characters
-        sanitized = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', input_text)
+        # Remove null bytes and control characters (preserving tab, newline, carriage return)
+        sanitized = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', input_text)
 
         # Look for potential Base64 obfuscated text and decode it to scan inside it
         base64_matches = re.findall(r'\b[A-Za-z0-9+/]{40,}=*\b', sanitized)
