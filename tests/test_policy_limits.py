@@ -1,5 +1,8 @@
 import unittest
+import os
 from datetime import datetime, timedelta
+os.environ.setdefault("DATABASE_URL", f"sqlite:///{os.path.join(os.environ.get('TEMP', '.'), 'ai_security_unittest.db')}")
+
 from src.policy.policy_manager import PolicyManager
 from src.monitoring.database import SessionLocal, SecurityLog, init_db
 
@@ -115,8 +118,8 @@ class TestPolicyLimits(unittest.TestCase):
             self.assertFalse(res["allowed"])
             self.assertIn("restricted", res["reason"].lower())
 
-    def test_admin_bypass(self):
-        admin_id = "test_admin_user"
+    def test_user_id_admin_string_does_not_bypass(self):
+        admin_id = "test_guest_admin_user"
         
         # Set rate limits and access rules extremely restrictive
         # Write many logs
@@ -131,12 +134,20 @@ class TestPolicyLimits(unittest.TestCase):
             self.session.add(log)
         self.session.commit()
 
-        # Admin rate check should pass
+        # A user-controlled id containing "admin" must not bypass controls.
         res_rate = self.pm.check_rate_limit(admin_id)
+        self.assertFalse(res_rate["allowed"])
+
+        # A user-controlled id containing "admin" must not bypass model restrictions or quotas.
+        res_access = self.pm.check_user_access(admin_id, "gpt-4")
+        self.assertFalse(res_access["allowed"])
+
+    def test_red_team_scanner_bypass(self):
+        # The internal scanner service principal is the only explicit bypass.
+        res_rate = self.pm.check_rate_limit("red_team_scanner")
         self.assertTrue(res_rate["allowed"])
 
-        # Admin access check with premium model should pass
-        res_access = self.pm.check_user_access(admin_id, "gpt-4")
+        res_access = self.pm.check_user_access("red_team_scanner", "gpt-4")
         self.assertTrue(res_access["allowed"])
 
 if __name__ == "__main__":

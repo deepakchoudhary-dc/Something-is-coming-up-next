@@ -2,6 +2,11 @@
 Basic tests for AI Security Gateway
 """
 
+import os
+os.environ.setdefault("DATABASE_URL", f"sqlite:///{os.path.join(os.environ.get('TEMP', '.'), 'ai_security_unittest.db')}")
+
+from src.monitoring.database import init_db
+init_db()
 from src.filters.input_filter import InputFilter
 from src.classifiers.ai_classifier import AIClassifier
 from src.policy.policy_manager import PolicyManager

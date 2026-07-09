@@ -1,4 +1,7 @@
 import unittest
+import os
+os.environ.setdefault("DATABASE_URL", f"sqlite:///{os.path.join(os.environ.get('TEMP', '.'), 'ai_security_unittest.db')}")
+
 from src.sandbox.sandbox_manager import SandboxManager
 
 class TestSandboxSafety(unittest.TestCase):

@@ -8,6 +8,8 @@ import tempfile
 import os
 import sys
 import ast
+import signal
+import shlex
 from typing import Dict, Any, Optional
 from ..config.settings import settings
 
@@ -31,7 +33,7 @@ class ASTSafetyVisitor(ast.NodeVisitor):
         self.dangerous_builtins = {
             'eval', 'exec', 'open', 'compile', 'globals', 'locals', 
             '__import__', 'dir', 'help', 'input', 'raw_input', 'builtins',
-            'getattr', 'setattr', 'delattr'
+            'getattr', 'setattr', 'delattr', 'vars', 'memoryview'
         }
 
     def visit_Import(self, node):
@@ -82,6 +84,9 @@ class ASTSafetyVisitor(ast.NodeVisitor):
 class SandboxManager:
     def __init__(self):
         self.timeout = settings.SANDBOX_TIMEOUT
+        self.max_output_chars = settings.SANDBOX_MAX_OUTPUT_CHARS
+        self.max_code_chars = settings.SANDBOX_MAX_CODE_CHARS
+        self.runner_command = settings.SANDBOX_RUNNER_COMMAND
 
     def execute_code(self, code: str, language: str = "python") -> Dict[str, Any]:
         """
@@ -94,10 +99,24 @@ class SandboxManager:
                 "output": ""
             }
 
+        if len(code) > self.max_code_chars:
+            return {
+                "success": False,
+                "error": f"Code block exceeds sandbox size limit of {self.max_code_chars} characters.",
+                "output": ""
+            }
+
         if language.lower() != "python":
             return {
                 "success": False,
                 "error": f"Unsupported execution language: {language}",
+                "output": ""
+            }
+
+        if not settings.SANDBOX_EXECUTION_ENABLED:
+            return {
+                "success": False,
+                "error": "Sandbox execution is disabled by gateway policy.",
                 "output": ""
             }
 
@@ -112,7 +131,7 @@ class SandboxManager:
                 "safety_details": validation
             }
 
-        # Step 2: Isolated process execution
+        # Step 2: Isolated process execution. Production must use an external runner.
         return self.execute_in_isolated_process(code)
 
     def execute_in_isolated_process(self, code: str) -> Dict[str, Any]:
@@ -121,29 +140,52 @@ class SandboxManager:
         """
         sandbox_dir = self.create_sandbox_environment()
         script_path = os.path.join(sandbox_dir, "sandbox_run.py")
+        stdout_path = os.path.join(sandbox_dir, "stdout.txt")
+        stderr_path = os.path.join(sandbox_dir, "stderr.txt")
 
         try:
             # Write python script to sandbox folder
             with open(script_path, "w", encoding="utf-8") as f:
                 f.write(code)
 
-            # Get absolute path to the sandbox runtime wrapper
-            wrapper_path = os.path.abspath(
-                os.path.join(os.path.dirname(__file__), "sandbox_wrapper.py")
-            )
+            command = self._build_runner_command(script_path)
 
             # Execute code using the wrapper
-            result = subprocess.run(
-                [sys.executable, wrapper_path, script_path],
-                capture_output=True,
-                text=True,
-                timeout=self.timeout,
-                cwd=sandbox_dir
-            )
+            stdout_file = open(stdout_path, "w", encoding="utf-8", errors="replace")
+            stderr_file = open(stderr_path, "w", encoding="utf-8", errors="replace")
+            popen_kwargs = {
+                "stdout": stdout_file,
+                "stderr": stderr_file,
+                "text": True,
+                "cwd": sandbox_dir,
+                "env": self._safe_subprocess_env(),
+            }
+            if os.name == "nt":
+                popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            else:
+                popen_kwargs["start_new_session"] = True
 
-            success = result.returncode == 0
-            output = result.stdout
-            error = result.stderr
+            process = subprocess.Popen(command, **popen_kwargs)
+            try:
+                process.wait(timeout=self.timeout)
+            except subprocess.TimeoutExpired:
+                self._terminate_process(process)
+                process.wait(timeout=2)
+                logger.error(f"Sandbox execution timeout: exceeded {self.timeout}s limit")
+                stdout_file.close()
+                stderr_file.close()
+                return {
+                    "success": False,
+                    "error": f"Execution timed out. Execution limit is {self.timeout} seconds.",
+                    "output": self._read_capped_file(stdout_path)
+                }
+            finally:
+                stdout_file.close()
+                stderr_file.close()
+
+            output = self._read_capped_file(stdout_path)
+            error = self._read_capped_file(stderr_path)
+            success = process.returncode == 0
 
             return {
                 "success": success,
@@ -151,13 +193,6 @@ class SandboxManager:
                 "error": error if error else None
             }
 
-        except subprocess.TimeoutExpired:
-            logger.error(f"Sandbox execution timeout: exceeded {self.timeout}s limit")
-            return {
-                "success": False,
-                "error": f"Execution timed out. Execution limit is {self.timeout} seconds.",
-                "output": ""
-            }
         except Exception as e:
             logger.error(f"Isolated process execution error: {e}")
             return {
@@ -167,6 +202,18 @@ class SandboxManager:
             }
         finally:
             self.cleanup_sandbox(sandbox_dir)
+
+    def _build_runner_command(self, script_path: str):
+        if self.runner_command:
+            return shlex.split(self.runner_command) + [script_path]
+
+        if settings.ENVIRONMENT in {"prod", "production", "staging"} and not settings.SANDBOX_ALLOW_HOST_RUNNER_IN_PRODUCTION:
+            raise RuntimeError("Sandbox external runner is required in production.")
+
+        wrapper_path = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "sandbox_wrapper.py")
+        )
+        return [sys.executable, wrapper_path, script_path]
 
     def validate_code_safety(self, code: str) -> Dict[str, Any]:
         """
@@ -204,9 +251,8 @@ class SandboxManager:
         lines = len(code.split('\n'))
         if lines > 150:
             validation["score"] -= 0.1
+            validation["safe"] = False
             validation["issues"].append("Script length exceeds allowed gateway limit of 150 lines")
-            if lines > 300:
-                validation["safe"] = False
 
         # Ensure safety score is normalized
         validation["score"] = max(0.0, min(1.0, validation["score"]))
@@ -234,3 +280,34 @@ class SandboxManager:
             logger.debug(f"Cleaned up sandbox: {sandbox_path}")
         except Exception as e:
             logger.error(f"Failed to cleanup sandbox {sandbox_path}: {e}")
+
+    def _safe_subprocess_env(self) -> Dict[str, str]:
+        safe_env = {}
+        for key in ["PATH", "SYSTEMROOT", "WINDIR", "TMP", "TEMP"]:
+            value = os.environ.get(key)
+            if value:
+                safe_env[key] = value
+        safe_env["PYTHONIOENCODING"] = "utf-8"
+        safe_env["PYTHONNOUSERSITE"] = "1"
+        safe_env["SANDBOX_MAX_OUTPUT_CHARS"] = str(self.max_output_chars)
+        return safe_env
+
+    def _read_capped_file(self, path: str) -> str:
+        if not os.path.exists(path):
+            return ""
+        with open(path, "r", encoding="utf-8", errors="replace") as stream:
+            value = stream.read(self.max_output_chars + 1)
+        if len(value) <= self.max_output_chars:
+            return value
+        return value[:self.max_output_chars] + "\n[TRUNCATED: sandbox output limit exceeded]"
+
+    def _terminate_process(self, process: subprocess.Popen):
+        if process.poll() is not None:
+            return
+        try:
+            if os.name == "nt":
+                process.terminate()
+            else:
+                os.killpg(process.pid, signal.SIGTERM)
+        except Exception:
+            process.kill()

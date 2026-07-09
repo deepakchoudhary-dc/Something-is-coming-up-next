@@ -12,6 +12,52 @@ from ..policy.policy_manager import PolicyManager
 logger = logging.getLogger(__name__)
 
 class InputFilter:
+    DEFAULT_MALICIOUS_PATTERNS = [
+        r"ignore\s+(?:previous|all|prior|above|below)\s+(?:instruction|directive|constraint|rule|prompt|guideline)",
+        r"(?:disregard|forget)\s+(?:previous|all|prior|above|earlier)\s+(?:instruction|direction|directive|constraint|rule|prompt|guideline)",
+        r"do\s+not\s+follow\s+(?:your\s+)?(?:previous|prior|system|developer)\s+(?:policy|instruction|directive|rule)",
+        r"override\s+(?:instruction|directive|constraint|rule|prompt|guideline)",
+        r"bypass\s+(?:filter|safety|block|restriction|gateway|guardrail)",
+        r"\bDAN\s+mode\b",
+        r"\bdeveloper\s+mode\b",
+        r"\bdo\s+anything\s+now\b",
+        r"\bjailbreak\b",
+        r"\buncensored\b",
+        r"roleplay\s+as\s+an?\s+unrestricted",
+        r"hypothetical\s+scenario\s+where\s+you\s+can\s+do",
+        r"output\s+your\s+system\s+prompt",
+        r"(?:show|reveal|print|dump)\s+(?:your|the|hidden)\s+(?:system\s+instructions|developer\s+(?:instructions|message)|initial\s+prompt|system\s+prompt)",
+        r"what\s+are\s+your\s+instructions\?",
+        r"repeat\s+everything\s+above",
+        r"print\s+the\s+text\s+above",
+        r"subprocess\.(?:Popen|run|call|check_output)",
+        r"os\.(?:system|popen|spawn|exec)",
+        r"__import__\s*\(\s*['\"](?:os|subprocess|sys|shutil|socket)['\"]\s*\)",
+        r"shutil\.(?:rmtree|copy|move)",
+        r"pty\.(?:spawn|fork)",
+        r"socket\.socket",
+        r"<script[^>]*>",
+        r"javascript\s*:",
+        r"onload\s*=",
+        r"onerror\s*="
+    ]
+
+    DEFAULT_PII_PATTERNS = [
+        {"name": "Credit Card", "regex": r'\b(?:\d[ -]*?){13,16}\b', "replacement": '[REDACTED CREDIT CARD]'},
+        {"name": "Email", "regex": r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b', "replacement": '[REDACTED EMAIL]'},
+        {"name": "US Phone", "regex": r'\b(?:\+?1[-. ]?)?\(?([0-9]{3})\)?[-. ]?([0-9]{3})[-. ]?([0-9]{4})\b', "replacement": '[REDACTED PHONE]'},
+        {"name": "OpenAI API Key", "regex": r'sk-(?:proj-)?[a-zA-Z0-9_-]{20,}', "replacement": '[REDACTED OPENAI KEY]'},
+        {"name": "GitHub Token", "regex": r'gh[pousr]_[A-Za-z0-9_]{30,}', "replacement": '[REDACTED GITHUB TOKEN]'},
+        {"name": "Slack Token", "regex": r'xox[baprs]-[A-Za-z0-9-]{20,}', "replacement": '[REDACTED SLACK TOKEN]'},
+        {"name": "JWT", "regex": r'\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b', "replacement": '[REDACTED JWT]'},
+        {"name": "Bearer Token", "regex": r'(?i)\bAuthorization\s*:\s*Bearer\s+[A-Za-z0-9._~+/=-]{20,}', "replacement": 'Authorization: Bearer [REDACTED]'},
+        {"name": "Database URL", "regex": r'(?i)\b(?:postgres|postgresql|mysql|mongodb|redis)://[^\s\'"]+:[^\s\'"]+@[^\s\'"]+', "replacement": '[REDACTED DATABASE URL]'},
+        {"name": "Credentials/Passwords", "regex": r'(?i)(?:api_key|apikey|password|secret|private_key|token|passwd|db_password|database_url)\s*[:=]\s*[\'"]?[^\'"\s]{6,}[\'"]?', "replacement": '/* [REDACTED CREDENTIAL] */'},
+        {"name": "AWS Key ID", "regex": r'AKIA[0-9A-Z]{16}', "replacement": '[REDACTED AWS KEY ID]'},
+        {"name": "AWS Secret Access Key", "regex": r'(?i)aws_secret_access_key\s*[:=]\s*[A-Za-z0-9/+=]{40}', "replacement": 'aws_secret_access_key=[REDACTED AWS SECRET]'},
+        {"name": "Google Maps API Key", "regex": r'AIza[0-9A-Za-z-_]{35}', "replacement": '[REDACTED GOOGLE KEY]'}
+    ]
+
     def __init__(self):
         pm = PolicyManager()
         policies = pm.get_policies()
@@ -19,33 +65,8 @@ class InputFilter:
         input_rules = input_policy.get("rules", {}) if input_policy else {}
 
         # Load block patterns dynamically, falling back to static list if not configured
-        self.malicious_patterns = input_rules.get("block_patterns", [
-            r"ignore\s+(?:previous|all|prior|above|below)\s+(?:instruction|directive|constraint|rule|prompt|guideline)",
-            r"override\s+(?:instruction|directive|constraint|rule|prompt|guideline)",
-            r"bypass\s+(?:filter|safety|block|restriction|gateway)",
-            r"\bDAN\s+mode\b",
-            r"\bdeveloper\s+mode\b",
-            r"\bdo\s+anything\s+now\b",
-            r"\bjailbreak\b",
-            r"\buncensored\b",
-            r"roleplay\s+as\s+an?\s+unrestricted",
-            r"hypothetical\s+scenario\s+where\s+you\s+can\s+do",
-            r"output\s+your\s+system\s+prompt",
-            r"reveal\s+(?:your|the)\s+(?:system\s+instructions|developer\s+instructions|initial\s+prompt)",
-            r"what\s+are\s+your\s+instructions\?",
-            r"repeat\s+everything\s+above",
-            r"print\s+the\s+text\s+above",
-            r"subprocess\.(?:Popen|run|call|check_output)",
-            r"os\.(?:system|popen|spawn|exec)",
-            r"__import__\s*\(\s*['\"](?:os|subprocess|sys|shutil|socket)['\"]\s*\)",
-            r"shutil\.(?:rmtree|copy|move)",
-            r"pty\.(?:spawn|fork)",
-            r"socket\.socket",
-            r"<script[^>]*>",
-            r"javascript\s*:",
-            r"onload\s*=\s*",
-            r"onerror\s*=\s*"
-        ])
+        configured_patterns = input_rules.get("block_patterns", [])
+        self.malicious_patterns = list(dict.fromkeys(self.DEFAULT_MALICIOUS_PATTERNS + configured_patterns))
 
         # Leetspeak translations for common bypass words
         self.leetspeak_patterns = [
@@ -63,15 +84,11 @@ class InputFilter:
         self.min_length = input_rules.get("min_length", 1)
 
         # Dynamic PII patterns
-        self.pii_patterns = input_rules.get("pii_patterns", [
-            {"name": "Credit Card", "regex": r'\b(?:\d[ -]*?){13,16}\b', "replacement": '[REDACTED CREDIT CARD]'},
-            {"name": "Email", "regex": r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b', "replacement": '[REDACTED EMAIL]'},
-            {"name": "US Phone", "regex": r'\b(?:\+?1[-. ]?)?\(?([0-9]{3})\)?[-. ]?([0-9]{3})[-. ]?([0-9]{4})\b', "replacement": '[REDACTED PHONE]'},
-            {"name": "OpenAI API Key", "regex": r'sk-[a-zA-Z0-9]{48}', "replacement": '[REDACTED OPENAI KEY]'},
-            {"name": "Credentials/Passwords", "regex": r'(?i)(?:api_key|apikey|password|secret|private_key|token|passwd|db_password)\s*[:=]\s*[\'"][^\'"]{6,}[\'"]', "replacement": '/* [REDACTED CREDENTIAL] */'},
-            {"name": "AWS Key ID", "regex": r'AKIA[0-9A-Z]{16}', "replacement": '[REDACTED AWS KEY ID]'},
-            {"name": "Google Maps API Key", "regex": r'AIza[0-9A-Za-z-_]{35}', "replacement": '[REDACTED GOOGLE KEY]'}
-        ])
+        configured_pii = input_rules.get("pii_patterns", [])
+        self.pii_patterns = self.DEFAULT_PII_PATTERNS + [
+            pii for pii in configured_pii
+            if pii.get("name") not in {default["name"] for default in self.DEFAULT_PII_PATTERNS}
+        ]
 
     def sanitize(self, input_text: str) -> str:
         """
@@ -81,8 +98,7 @@ class InputFilter:
         if not input_text:
             return ""
 
-        # Remove null bytes and control characters (preserving tab, newline, carriage return)
-        sanitized = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', input_text)
+        sanitized = self._normalize_for_security(input_text)
 
         # Look for potential Base64 obfuscated text and decode it to scan inside it
         base64_matches = re.findall(r'\b[A-Za-z0-9+/]{40,}=*\b', sanitized)
@@ -108,18 +124,26 @@ class InputFilter:
             logger.warning(f"Input size violation: {len(input_text)} characters")
             return True
 
+        normalized_text = self._normalize_for_security(input_text)
+
         # Check leetspeak versions
-        de_leet_text = input_text.lower()
+        de_leet_text = normalized_text.lower()
         for pattern, replacement in self.leetspeak_patterns:
             de_leet_text = re.sub(pattern, replacement, de_leet_text)
 
         # Scan against compiled blocklist patterns
         for pattern in self.compiled_patterns:
-            if pattern.search(input_text) or pattern.search(de_leet_text):
+            if pattern.search(normalized_text) or pattern.search(de_leet_text):
                 logger.warning(f"Security filter blocked prompt pattern matching: '{pattern.pattern}'")
                 return True
 
         return False
+
+    def _normalize_for_security(self, input_text: str) -> str:
+        text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]', '', input_text or "")
+        text = re.sub(r'[\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]', '', text)
+        text = re.sub(r'(?i)\b([a-z])(?:\s+)([a-z])(?:\s+)([a-z])(?:\s+)([a-z])(?:\s+)([a-z])\b', r'\1\2\3\4\5', text)
+        return text
 
     def is_indirect_injection(self, context_text: str) -> bool:
         """

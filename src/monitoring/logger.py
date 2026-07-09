@@ -2,8 +2,11 @@
 Monitoring and Logging Module - Connected to SQLite database
 """
 
+import contextvars
 import logging
 import logging.handlers
+import re
+import uuid
 from datetime import datetime
 from typing import Dict, Any, List, Optional
 import json
@@ -12,6 +15,51 @@ from ..config.settings import settings
 from ..monitoring.database import SessionLocal, SecurityLog
 
 logger = logging.getLogger(__name__)
+
+# ── Request ID context ─────────────────────────────────────────────────
+_request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar("request_id", default="")
+
+
+def set_request_id(request_id: Optional[str] = None) -> str:
+    """Set the request ID for the current async context.  Returns the ID."""
+    rid = request_id or uuid.uuid4().hex[:16]
+    _request_id_var.set(rid)
+    return rid
+
+
+def get_request_id() -> str:
+    """Get the current request ID."""
+    return _request_id_var.get("")
+
+SENSITIVE_KEY_PATTERN = re.compile(r"(key|token|secret|password|credential|authorization|cookie)", re.IGNORECASE)
+SECRET_VALUE_PATTERNS = [
+    (re.compile(r"sk-(?:proj-)?[A-Za-z0-9_-]{20,}"), "[REDACTED OPENAI KEY]"),
+    (re.compile(r"gh[pousr]_[A-Za-z0-9_]{30,}"), "[REDACTED GITHUB TOKEN]"),
+    (re.compile(r"xox[baprs]-[A-Za-z0-9-]{20,}"), "[REDACTED SLACK TOKEN]"),
+    (re.compile(r"(?i)\bAuthorization\s*:\s*Bearer\s+[A-Za-z0-9._~+/=-]{20,}"), "Authorization: Bearer [REDACTED]"),
+    (re.compile(r"(?i)(?:api_key|apikey|password|secret|private_key|token|passwd|db_password)\s*[:=]\s*['\"]?[^'\"\s]{6,}['\"]?"), "[REDACTED CREDENTIAL]"),
+]
+
+
+def redact_for_log(value: Any, max_string: int = 500) -> Any:
+    if isinstance(value, dict):
+        redacted = {}
+        for key, item in value.items():
+            if SENSITIVE_KEY_PATTERN.search(str(key)):
+                redacted[key] = "[REDACTED]"
+            else:
+                redacted[key] = redact_for_log(item, max_string=max_string)
+        return redacted
+    if isinstance(value, list):
+        return [redact_for_log(item, max_string=max_string) for item in value[:50]]
+    if isinstance(value, str):
+        result = value
+        for pattern, replacement in SECRET_VALUE_PATTERNS:
+            result = pattern.sub(replacement, result)
+        if len(result) > max_string:
+            return result[:max_string] + "...[TRUNCATED]"
+        return result
+    return value
 
 class SecurityLogger:
     def __init__(self):
@@ -29,7 +77,7 @@ class SecurityLogger:
         log_entry = {
             "timestamp": datetime.utcnow().isoformat(),
             "type": log_type,
-            "data": data,
+            "data": redact_for_log(data),
             "source": "ai_security_gateway"
         }
         logger.info(f"Security Log - {log_type}: {json.dumps(log_entry)}")
@@ -60,13 +108,14 @@ class SecurityLogger:
         # Console output
         log_entry = {
             "timestamp": datetime.utcnow().isoformat(),
+            "request_id": get_request_id(),
             "user_id": user_id,
             "prompt_len": len(prompt),
             "response_len": len(response) if response else 0,
             "risk_score": risk_score,
             "flagged": flagged,
             "duration": duration,
-            "anomalies": anomalies,
+            "anomalies": redact_for_log(anomalies),
             "trace_steps": len(trace) if trace else 0,
             "action_taken": action_taken
         }
@@ -103,7 +152,7 @@ class SecurityLogger:
         anomaly_entry = {
             "timestamp": datetime.utcnow().isoformat(),
             "type": "anomaly",
-            "anomaly": anomaly_data,
+            "anomaly": redact_for_log(anomaly_data),
             "severity": anomaly_data.get("severity", "medium")
         }
         logger.warning(f"Anomaly Detected: {json.dumps(anomaly_entry)}")
@@ -119,7 +168,7 @@ class SecurityLogger:
         event_entry = {
             "timestamp": datetime.utcnow().isoformat(),
             "type": "security_event",
-            "event": event_data
+            "event": redact_for_log(event_data)
         }
         logger.error(f"Security Event: {json.dumps(event_entry)}")
 
@@ -180,17 +229,46 @@ class AnomalyDetector:
 security_logger = SecurityLogger()
 anomaly_detector = AnomalyDetector()
 
+class StructuredJsonFormatter(logging.Formatter):
+    """Structured JSON log formatter with request ID injection."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        entry = {
+            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+            "request_id": get_request_id(),
+        }
+        if record.exc_info and record.exc_info[0] is not None:
+            entry["exception"] = self.formatException(record.exc_info)
+        return json.dumps(entry, default=str)
+
+
 def setup_logging():
-    """Setup logging configuration"""
+    """Setup logging configuration with optional structured JSON format."""
     import os
     os.makedirs("logs", exist_ok=True)
+    log_level = getattr(logging, settings.normalized_log_level())
+
+    log_format = getattr(settings, "LOG_FORMAT", "text")
+
+    if log_format == "json":
+        formatter = StructuredJsonFormatter()
+    else:
+        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+    file_handler = logging.handlers.RotatingFileHandler(
+        "logs/ai_security.log", maxBytes=5 * 1024 * 1024, backupCount=5
+    )
+    file_handler.setFormatter(formatter)
+
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(formatter)
+
     logging.basicConfig(
-        level=getattr(logging, settings.LOG_LEVEL.upper()),
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler("logs/ai_security.log"),
-            logging.StreamHandler()
-        ]
+        level=log_level,
+        handlers=[file_handler, stream_handler],
     )
 
 def log_request(data: Dict[str, Any], log_type: str = "request"):

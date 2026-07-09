@@ -5,11 +5,46 @@ Executes target script in a highly restricted globals/builtins scope
 
 import sys
 import importlib
+import os
 import traceback
+
+
+class CappedTextWriter:
+    def __init__(self, wrapped, limit: int):
+        self._wrapped = wrapped
+        self._limit = max(0, limit)
+        self._written = 0
+        self._truncated = False
+
+    def write(self, text):
+        if not isinstance(text, str):
+            text = str(text)
+        remaining = self._limit - self._written
+        if remaining <= 0:
+            self._write_truncation_notice()
+            return len(text)
+        chunk = text[:remaining]
+        self._wrapped.write(chunk)
+        self._written += len(chunk)
+        if len(text) > remaining:
+            self._write_truncation_notice()
+        return len(text)
+
+    def flush(self):
+        return self._wrapped.flush()
+
+    def _write_truncation_notice(self):
+        if not self._truncated:
+            self._wrapped.write("\n[TRUNCATED: sandbox output limit exceeded]\n")
+            self._truncated = True
 
 def run_safe(code_path: str):
     with open(code_path, "r", encoding="utf-8") as f:
         code = f.read()
+
+    max_output = int(os.environ.get("SANDBOX_MAX_OUTPUT_CHARS", "20000"))
+    sys.stdout = CappedTextWriter(sys.stdout, max_output)
+    sys.stderr = CappedTextWriter(sys.stderr, max_output)
 
     # Allowed standard modules list
     ALLOWED_MODULES = {

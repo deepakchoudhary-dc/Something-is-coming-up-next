@@ -1,4 +1,7 @@
 import unittest
+import os
+os.environ.setdefault("DATABASE_URL", f"sqlite:///{os.path.join(os.environ.get('TEMP', '.'), 'ai_security_unittest.db')}")
+
 from src.policy.policy_manager import PolicyManager
 from src.classifiers.semantic_detector import SemanticDetector
 from src.filters.input_filter import InputFilter

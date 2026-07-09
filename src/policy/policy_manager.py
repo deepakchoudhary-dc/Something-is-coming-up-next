@@ -4,6 +4,7 @@ Policy Management Module - Connected to SQLite database Locally
 
 import json
 import logging
+import copy
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
@@ -180,7 +181,7 @@ class PolicyManager:
             name: {
                 "name": policy.name,
                 "description": policy.description,
-                "rules": policy.rules,
+                "rules": copy.deepcopy(policy.rules),
                 "enabled": policy.enabled
             }
             for name, policy in self.policies.items()
@@ -297,8 +298,8 @@ class PolicyManager:
         """
         Check if the user has exceeded their rate limits based on security logs.
         """
-        # Admin / scanner bypasses all rate limiting
-        if "admin" in user_id.lower() or user_id == "red_team_scanner":
+        # Internal scanner bypass is explicit; user_id naming never grants admin privileges.
+        if user_id == "red_team_scanner":
             return {"allowed": True}
 
         # Reload latest policies
@@ -354,8 +355,8 @@ class PolicyManager:
         """
         Check if user complies with daily request quotas and model restrictions.
         """
-        # Admin / scanner bypasses all access checks
-        if "admin" in user_id.lower() or user_id == "red_team_scanner":
+        # Internal scanner bypass is explicit; user_id naming never grants admin privileges.
+        if user_id == "red_team_scanner":
             return {"allowed": True}
 
         # Reload latest policies

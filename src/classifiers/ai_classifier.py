@@ -5,6 +5,7 @@ AI Classifier Module - Uses AI model pipelines for security check, falling back 
 import logging
 import re
 from typing import Dict, List
+from ..config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -25,8 +26,8 @@ class AIClassifier:
             
             # Use a short timeout/local-only parameter if possible (default transformers does not support timeout directly,
             # but we catch exceptions quickly)
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name, local_files_only=False)
-            self.model = AutoModelForSequenceClassification.from_pretrained(self.model_name, local_files_only=False)
+            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name, local_files_only=settings.AI_CLASSIFIER_LOCAL_ONLY)
+            self.model = AutoModelForSequenceClassification.from_pretrained(self.model_name, local_files_only=settings.AI_CLASSIFIER_LOCAL_ONLY)
             self.classifier = pipeline(
                 "text-classification",
                 model=self.model,
@@ -148,11 +149,14 @@ class AIClassifier:
         # Check vectors
         injection_rules = [
             (r"ignore\s+(?:all\s+)?previous\s+(?:rules|instructions)", 0.65, "ignore_instruction"),
+            (r"(?:disregard|forget)\s+(?:all\s+)?(?:previous|earlier|above)\s+(?:rules|instructions|directions)", 0.65, "ignore_instruction"),
+            (r"do\s+not\s+follow\s+(?:your\s+)?(?:previous|system|developer)\s+(?:policy|instructions|rules)", 0.65, "ignore_instruction"),
             (r"override\s+(?:your\s+)?restrictions", 0.55, "override_rules"),
             (r"\byou\s+are\s+now\s+a\s+(?:DAN|developer\s+mode|unrestricted)", 0.75, "jailbreak_dan"),
             (r"hypothetical\s+conversation\s+where", 0.45, "roleplay_bypass"),
             (r"tell\s+me\s+how\s+to\s+make\s+a\s+(?:bomb|virus|weapon)", 0.8, "malicious_request"),
             (r"bypass\s+safety\s+filters", 0.5, "bypass_attempt"),
+            (r"(?:show|reveal|print|dump)\s+(?:hidden\s+)?(?:developer|system)\s+(?:message|prompt|instructions)", 0.75, "system_prompt_exfiltration"),
             (r"###\s*system|###\s*instruction", 0.35, "structured_hijack")
         ]
 
