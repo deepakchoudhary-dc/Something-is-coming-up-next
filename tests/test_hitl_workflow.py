@@ -87,6 +87,8 @@ class TestHITLExpiration:
         """Stale requests older than expiry_hours should be expired."""
         session = SessionLocal()
         try:
+            session.query(HITLRequest).filter(HITLRequest.request_id == "hitl_stale_test_001").delete()
+            session.commit()
             old_req = HITLRequest(
                 request_id="hitl_stale_test_001",
                 prompt="Old request",

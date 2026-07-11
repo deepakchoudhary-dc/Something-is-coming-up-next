@@ -12,5 +12,6 @@ if __name__ == "__main__":
         host=settings.HOST,
         port=settings.PORT,
         reload=settings.ENVIRONMENT == "development",
+        reload_excludes=["*.db", "*.db-journal", "*.db-wal", "*.db-shm", "*.log", "logs/*", ".pytest_cache/*"],
         log_level=settings.normalized_log_level().lower()
     )

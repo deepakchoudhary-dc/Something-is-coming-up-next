@@ -12,7 +12,6 @@ Usage::
         ...
 """
 
-import functools
 import logging
 from typing import Callable, List
 

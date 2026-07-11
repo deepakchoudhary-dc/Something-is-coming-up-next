@@ -199,26 +199,44 @@ class SecretsManager:
             raise SecretsError(f"No backend registered for scheme {backend_name!r}")
         return backend, path
 
-    def get_secret(self, reference: str) -> str:
+    def get_secret(self, reference: str, actor: Optional[str] = None, tenant_id: Optional[str] = None) -> str:
         """Retrieve the plaintext value for a stored reference."""
         if not reference or not _REFERENCE_PATTERN.match(reference):
             # Not a reference — return as-is (backward compat for raw values in dev)
             return reference
         backend, path = self._resolve_backend(reference)
-        return backend.get(path)
+        value = backend.get(path)
+        try:
+            from .audit_trail import log_secret_access
+            log_secret_access("get", reference, actor=actor, tenant_id=tenant_id)
+        except Exception as exc:
+            logger.error("Failed to log secret access: %s", exc)
+        return value
 
-    def store_secret(self, value: str, backend_name: str = "env", path: Optional[str] = None) -> str:
+    def store_secret(self, value: str, backend_name: str = "env", path: Optional[str] = None, actor: Optional[str] = None, tenant_id: Optional[str] = None) -> str:
         """Persist a secret and return the reference string."""
         if backend_name not in self._backends:
             raise SecretsError(f"Backend {backend_name!r} is not available")
         if path is None:
             path = f"GATEWAY_SECRET_{hashlib.sha256(value.encode()).hexdigest()[:12].upper()}"
-        return self._backends[backend_name].store(path, value)
+        ref = self._backends[backend_name].store(path, value)
+        try:
+            from .audit_trail import log_secret_access
+            log_secret_access("store", ref, actor=actor, tenant_id=tenant_id)
+        except Exception as exc:
+            logger.error("Failed to log secret storage: %s", exc)
+        return ref
 
-    def rotate_secret(self, reference: str, new_value: str) -> str:
+    def rotate_secret(self, reference: str, new_value: str, actor: Optional[str] = None, tenant_id: Optional[str] = None) -> str:
         """Replace the secret behind a reference with a new value."""
         backend, path = self._resolve_backend(reference)
-        return backend.rotate(path, new_value)
+        ref = backend.rotate(path, new_value)
+        try:
+            from .audit_trail import log_secret_access
+            log_secret_access("rotate", ref, actor=actor, tenant_id=tenant_id)
+        except Exception as exc:
+            logger.error("Failed to log secret rotation: %s", exc)
+        return ref
 
     def is_reference(self, value: str) -> bool:
         """Check whether a string looks like a secret reference."""

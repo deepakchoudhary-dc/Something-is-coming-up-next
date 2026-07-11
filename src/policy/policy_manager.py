@@ -60,7 +60,7 @@ class PolicyManager:
                 PolicyManager._cache_loaded_at = now
                 return policies
         except Exception as e:
-            print(f"Error loading policies from DB: {e}")
+            logger.error(f"Error loading policies from DB: {e}")
         finally:
             session.close()
 
@@ -151,7 +151,7 @@ class PolicyManager:
             self._clear_cache()
         except Exception as e:
             session.rollback()
-            print(f"Error saving policies to DB: {e}")
+            logger.error(f"Error saving policies to DB: {e}")
         finally:
             session.close()
 
@@ -207,7 +207,7 @@ class PolicyManager:
             self._clear_cache()
         except Exception as e:
             session.rollback()
-            print(f"Error updating policies: {e}")
+            logger.error(f"Error updating policies: {e}")
             return {"updated": [], "message": f"Error: {str(e)}"}
         finally:
             session.close()
@@ -229,7 +229,7 @@ class PolicyManager:
                 return True
         except Exception as e:
             session.rollback()
-            print(f"Error enabling policy: {e}")
+            logger.error(f"Error enabling policy: {e}")
         finally:
             session.close()
         return False
@@ -247,7 +247,7 @@ class PolicyManager:
                 return True
         except Exception as e:
             session.rollback()
-            print(f"Error disabling policy: {e}")
+            logger.error(f"Error disabling policy: {e}")
         finally:
             session.close()
         return False
@@ -271,7 +271,7 @@ class PolicyManager:
                 return True
         except Exception as e:
             session.rollback()
-            print(f"Error adding policy: {e}")
+            logger.error(f"Error adding policy: {e}")
         finally:
             session.close()
         return False
@@ -289,7 +289,7 @@ class PolicyManager:
                 return True
         except Exception as e:
             session.rollback()
-            print(f"Error removing policy: {e}")
+            logger.error(f"Error removing policy: {e}")
         finally:
             session.close()
         return False

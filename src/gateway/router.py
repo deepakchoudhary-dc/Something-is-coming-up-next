@@ -210,7 +210,7 @@ def extract_python_code(text: str) -> Optional[str]:
         return match.group(1)
     return None
 
-@router.post("/process", response_model=AIResponse, dependencies=[Depends(require_user_api_key)])
+@router.post("/process", response_model=AIResponse, dependencies=[_get_auth_dependency()])
 async def process_ai_request(request: AIRequest):
     """
     Process an AI request through the security gateway
@@ -565,8 +565,11 @@ async def process_ai_request(request: AIRequest):
             else:
                 # Resolve secrets from references
                 sm = get_secrets_manager()
-                primary_key = sm.get_secret(gw_config.primary_key) if gw_config and gw_config.primary_key else ""
-                fallback_key = sm.get_secret(gw_config.fallback_key) if gw_config and gw_config.fallback_key else ""
+                tenant_id = "default"
+                if ":" in request.user_id:
+                    tenant_id = request.user_id.split(":", 1)[0]
+                primary_key = sm.get_secret(gw_config.primary_key, actor=request.user_id, tenant_id=tenant_id) if gw_config and gw_config.primary_key else ""
+                fallback_key = sm.get_secret(gw_config.fallback_key, actor=request.user_id, tenant_id=tenant_id) if gw_config and gw_config.fallback_key else ""
 
                 try:
                     pr = get_provider_router()
