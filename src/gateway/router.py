@@ -557,10 +557,16 @@ async def process_ai_request(request: AIRequest):
                 "primary_model": gw_config.primary_model if gw_config else "mock"
             })
 
-            if provider_type == "mock" and (not gw_config or not gw_config.primary_key):
+            if not gw_config or not gw_config.primary_key:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail="No active LLM API provider key associated. Please configure your LLM provider API key."
+                )
+
+            if provider_type == "mock":
                 response_text = "Processed successfully."
                 add_trace("model_routing", "mock_response", {
-                    "reason": "no external provider configured"
+                    "reason": "mock provider request processed successfully"
                 })
             else:
                 # Resolve secrets from references
@@ -661,6 +667,8 @@ async def process_ai_request(request: AIRequest):
 
         return finalize_response()
 
+    except HTTPException as he:
+        raise he
     except Exception as e:
         logger.error(f"Error processing request: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")

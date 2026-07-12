@@ -227,7 +227,7 @@ def init_db():
             default_config = GatewayConfig(
                 primary_provider="mock",
                 primary_url="https://api.openai.com/v1/chat/completions",
-                primary_key="",
+                primary_key="env://MOCK_API_KEY",
                 primary_model="gpt-3.5-turbo",
                 fallback_enabled=False,
                 fallback_provider="mock",
@@ -237,6 +237,13 @@ def init_db():
                 allowed_topics=""
             )
             session.add(default_config)
+            session.commit()
+        else:
+            # Upgrade existing configs that have empty primary keys for tests/dev backward compatibility
+            configs = session.query(GatewayConfig).all()
+            for config in configs:
+                if not config.primary_key or config.primary_key == "":
+                    config.primary_key = "env://MOCK_API_KEY"
             session.commit()
 
         # Seed policy table if empty

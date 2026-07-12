@@ -270,6 +270,7 @@ def setup_logging():
         level=log_level,
         handlers=[file_handler, stream_handler],
     )
+    logging.getLogger("watchfiles").setLevel(logging.WARNING)
 
 def log_request(data: Dict[str, Any], log_type: str = "request"):
     """Convenience function to log requests"""
