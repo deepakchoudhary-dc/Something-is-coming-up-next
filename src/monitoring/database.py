@@ -6,7 +6,7 @@ import os
 import logging
 import json
 from datetime import datetime
-from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, Text, DateTime, text
+from sqlalchemy import create_engine, Column, Integer, String, Float, Boolean, Text, DateTime, text, UniqueConstraint
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, scoped_session
 from ..config.settings import settings
@@ -133,6 +133,27 @@ class GatewayConfig(Base):
     
     # Topic limits rail config
     allowed_topics = Column(Text, default="")  # Comma-separated list of allowed topics (e.g., support, account)
+
+class IdempotencyRecord(Base):
+    __tablename__ = "idempotency_records"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "subject", "endpoint", "key_digest", name="uq_idempotency_key"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(String(100), nullable=False, index=True)
+    subject = Column(String(200), nullable=False, index=True)
+    endpoint = Column(String(255), nullable=False, index=True)
+    key_digest = Column(String(64), nullable=False, index=True)
+    request_fingerprint = Column(String(64), nullable=False)
+    state = Column(String(50), nullable=False, default="in_progress", index=True)  # in_progress | completed
+    execution_token = Column(String(64), nullable=False)
+    response_status = Column(Integer, nullable=True)
+    response_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=False, index=True)
 
 def _add_sqlite_column_if_missing(table_name: str, column_name: str, definition: str):
     if not db_url.startswith("sqlite"):

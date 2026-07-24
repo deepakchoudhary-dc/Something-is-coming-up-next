@@ -206,15 +206,10 @@ class SandboxManager:
     def _build_runner_command(self, script_path: str):
         if self.runner_command:
             return shlex.split(self.runner_command) + [script_path]
-
-        if settings.ENVIRONMENT in {"prod", "production", "staging"} and not settings.SANDBOX_ALLOW_HOST_RUNNER_IN_PRODUCTION:
-            raise RuntimeError("Sandbox external runner is required in production.")
-
-        wrapper_path = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "sandbox_wrapper.py")
-        )
-        return [sys.executable, wrapper_path, script_path]
-
+        if settings.ENVIRONMENT == "test" and settings.SANDBOX_ALLOW_HOST_RUNNER_IN_TESTS:
+            wrapper_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "sandbox_wrapper.py"))
+            return [sys.executable, wrapper_path, script_path]
+        raise RuntimeError("A hardened external sandbox runner is required; host subprocess execution is disabled.")
     def validate_code_safety(self, code: str) -> Dict[str, Any]:
         """
         Validate code for safety before execution using AST parsing

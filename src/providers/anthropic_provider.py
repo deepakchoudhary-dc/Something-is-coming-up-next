@@ -71,7 +71,7 @@ class AnthropicProvider(LLMProvider):
 
         start = time.monotonic()
         try:
-            resp = self._session.post(self._base_url, json=payload, timeout=timeout)
+            resp = self._session.post(self._base_url, json=payload, timeout=timeout, allow_redirects=False)
         except requests.exceptions.Timeout as exc:
             raise ProviderError(f"Request timed out after {timeout}s", retryable=True) from exc
         except requests.exceptions.ConnectionError as exc:

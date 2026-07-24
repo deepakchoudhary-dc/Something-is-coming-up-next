@@ -100,7 +100,8 @@ class SecurityLogger:
         client_ip: Optional[str] = "127.0.0.1",
         system_prompt: Optional[str] = None,
         retrieved_context: Optional[str] = None,
-        trace: Optional[List[Dict]] = None
+        trace: Optional[List[Dict]] = None,
+        tenant_id: Optional[str] = None
     ):
         """
         Log a complete security transaction to the SQLite database
@@ -110,6 +111,7 @@ class SecurityLogger:
             "timestamp": datetime.utcnow().isoformat(),
             "request_id": get_request_id(),
             "user_id": user_id,
+            "tenant_id": tenant_id,
             "prompt_len": len(prompt),
             "response_len": len(response) if response else 0,
             "risk_score": risk_score,
@@ -137,6 +139,8 @@ class SecurityLogger:
                 trace_json=json.dumps(trace or []),
                 action_taken=action_taken,
                 client_ip=client_ip,
+                request_id=get_request_id() or None,
+                tenant_id=tenant_id,
                 timestamp=datetime.utcnow()
             )
             session.add(db_log)
@@ -288,11 +292,12 @@ def log_transaction(
     client_ip: Optional[str] = "127.0.0.1",
     system_prompt: Optional[str] = None,
     retrieved_context: Optional[str] = None,
-    trace: Optional[List[Dict]] = None
+    trace: Optional[List[Dict]] = None,
+    tenant_id: Optional[str] = None
 ):
     """Convenience function to log a complete transaction"""
     security_logger.log_transaction(
-        user_id, prompt, response, risk_score, flagged, duration, anomalies, action_taken, client_ip, system_prompt, retrieved_context, trace
+        user_id, prompt, response, risk_score, flagged, duration, anomalies, action_taken, client_ip, system_prompt, retrieved_context, trace, tenant_id
     )
 
 def log_anomaly(anomaly_data: Dict[str, Any]):

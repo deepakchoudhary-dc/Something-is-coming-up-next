@@ -17,12 +17,12 @@ except (ImportError, Exception):
         # Fall back to compatibility v1 namespace in Pydantic V2
         from pydantic.v1 import BaseSettings
 
-_DEFAULT_DEV_SECRET = "dev-only-change-me"
-_PLACEHOLDER_SECRETS = {"", "your-secret-key-here", _DEFAULT_DEV_SECRET}
+_DEFAULT_DEV_SECRET = ""
+_PLACEHOLDER_SECRETS = {"", "your-secret-key-here", "dev-only-change-me"}
 _PRODUCTION_ENVIRONMENTS = {"prod", "production", "staging"}
 _DEFAULT_ALLOWED_ORIGINS = ["http://localhost:3000", "http://localhost:8080", "http://localhost:8000"]
 _DEFAULT_ALLOWED_METHODS = ["GET", "POST"]
-_DEFAULT_ALLOWED_HEADERS = ["Authorization", "Content-Type", "X-API-Key", "X-Admin-Token"]
+_DEFAULT_ALLOWED_HEADERS = ["Authorization", "Content-Type", "X-API-Key", "X-Admin-Token", "Idempotency-Key"]
 _VALID_CORS_METHODS = {"DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"}
 
 
@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     # Server settings
     HOST: str = "0.0.0.0"
     PORT: int = 8000
-    ENVIRONMENT: str = "development"
+    ENVIRONMENT: str = "production"
 
     # CORS
     ALLOWED_ORIGINS: Any = _DEFAULT_ALLOWED_ORIGINS
@@ -88,8 +88,8 @@ class Settings(BaseSettings):
     ENABLE_SECURITY_HEADERS: bool = True
     API_KEY: Optional[str] = None
     ADMIN_API_KEY: Optional[str] = None
-    REQUIRE_AUTH: bool = False
-    REQUIRE_ADMIN_AUTH: bool = False
+    REQUIRE_AUTH: bool = True
+    REQUIRE_ADMIN_AUTH: bool = True
     ALLOW_ADMIN_AUTH_VIA_USER_KEY: bool = False
     ALLOW_CLIENT_SYSTEM_PROMPT: bool = False
     DEFAULT_SYSTEM_PROMPT: str = "You are a secure AI assistant."
@@ -101,18 +101,19 @@ class Settings(BaseSettings):
     AI_CLASSIFIER_LOCAL_ONLY: bool = True
 
     # Sandbox settings
-    SANDBOX_EXECUTION_ENABLED: bool = True
+    SANDBOX_EXECUTION_ENABLED: bool = False
     SANDBOX_TIMEOUT: int = 5  # seconds
     SANDBOX_MAX_OUTPUT_CHARS: int = 20000
     SANDBOX_MAX_CODE_CHARS: int = 20000
     SANDBOX_RUNNER_COMMAND: Optional[str] = None
     SANDBOX_ALLOW_HOST_RUNNER_IN_PRODUCTION: bool = False
+    SANDBOX_ALLOW_HOST_RUNNER_IN_TESTS: bool = False
 
     # Monitoring
     LOG_LEVEL: str = "INFO"
     ELASTICSEARCH_HOST: str = ""
     ELASTICSEARCH_PORT: int = 9200
-    REDTEAM_ENDPOINTS_ENABLED: bool = True
+    REDTEAM_ENDPOINTS_ENABLED: bool = False
 
     # Human-in-the-Loop
     HITL_ENABLED: bool = True
@@ -122,7 +123,7 @@ class Settings(BaseSettings):
     HITL_EXPIRY_HOURS: int = 24
 
     # Authentication Mode
-    AUTH_MODE: str = "api_key"  # api_key | jwt
+    AUTH_MODE: str = "jwt"  # api_key | jwt
     JWT_SECRET_KEY: str = ""
     JWT_PUBLIC_KEY: str = ""
     JWT_ALGORITHM: str = "HS256"
@@ -133,6 +134,7 @@ class Settings(BaseSettings):
     # Secrets Management
     VAULT_ADDR: str = ""
     VAULT_TOKEN: str = ""
+    SECRETS_BACKEND: str = "vault"
 
     # Notifications
     NOTIFICATION_PROVIDER: str = "log"  # log | email | webhook
@@ -160,6 +162,10 @@ class Settings(BaseSettings):
     # Database Pooling (for Postgres)
     DB_POOL_SIZE: int = 5
     DB_MAX_OVERFLOW: int = 10
+
+    # Idempotency Control
+    IDEMPOTENCY_TTL_SECONDS: int = 86400  # 24 hours
+    IDEMPOTENCY_MAX_RESPONSE_BYTES: int = 1048576  # 1MB
 
     class Config:
         env_file = ".env"
@@ -231,12 +237,29 @@ class Settings(BaseSettings):
         if not self._is_production:
             return
 
-        if not self.REQUIRE_AUTH or not self.API_KEY or len(self.API_KEY) < 32:
-            raise ValueError("Production requires REQUIRE_AUTH=true and API_KEY with at least 32 characters")
-        if not self.REQUIRE_ADMIN_AUTH or not self.ADMIN_API_KEY or len(self.ADMIN_API_KEY) < 32:
-            raise ValueError("Production requires REQUIRE_ADMIN_AUTH=true and ADMIN_API_KEY with at least 32 characters")
-        if self.API_KEY == self.ADMIN_API_KEY:
-            raise ValueError("API_KEY and ADMIN_API_KEY must be different")
+        if self.AUTH_MODE not in {"api_key", "jwt"}:
+            raise ValueError("AUTH_MODE must be api_key or jwt")
+        if not self.REQUIRE_AUTH or not self.REQUIRE_ADMIN_AUTH:
+            raise ValueError("Production authentication and administrative authorization must be enabled")
+        if self.AUTH_MODE == "api_key":
+            if not self.API_KEY or len(self.API_KEY) < 32:
+                raise ValueError("Production API-key authentication requires API_KEY with at least 32 characters")
+            if not self.ADMIN_API_KEY or len(self.ADMIN_API_KEY) < 32:
+                raise ValueError("Production API-key authentication requires ADMIN_API_KEY with at least 32 characters")
+            if self.API_KEY == self.ADMIN_API_KEY:
+                raise ValueError("API_KEY and ADMIN_API_KEY must be different")
+        else:
+            jwt_key = (self.JWT_SECRET_KEY or self.SECRET_KEY or "").strip()
+            if self.JWT_ALGORITHM == "HS256" and len(jwt_key) < 32:
+                raise ValueError("HS256 JWT authentication requires a dedicated secret of at least 32 characters")
+            if self.JWT_ALGORITHM == "RS256" and (not self.JWT_SECRET_KEY or not self.JWT_PUBLIC_KEY):
+                raise ValueError("RS256 JWT authentication requires separate JWT_SECRET_KEY and JWT_PUBLIC_KEY values")
+        if not self.PROVIDER_EGRESS_ALLOWLIST.strip():
+            raise ValueError("Production requires PROVIDER_EGRESS_ALLOWLIST")
+        if self.SECRETS_BACKEND != "vault":
+            raise ValueError("Production requires SECRETS_BACKEND=vault")
+        if not (self.VAULT_ADDR or "").strip().startswith("https://"):
+            raise ValueError("Production requires an HTTPS VAULT_ADDR")
 
     def _validate_production_sandbox(self):
         if not self._is_production:

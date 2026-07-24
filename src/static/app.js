@@ -469,6 +469,7 @@ async function fetchPolicies() {
     }
 }
 
+
 function renderActivePolicyForm() {
     const policy = STATE.policies[STATE.activePolicyName];
     if (!policy) {
@@ -496,7 +497,7 @@ function renderActivePolicyForm() {
             </div>
             <div class="form-group">
                 <label for="rule-block-patterns">Prohibited prompt patterns (One per line):</label>
-                <textarea id="rule-block-patterns" rows="5">${(rules.block_patterns || []).join('\n')}</textarea>
+                <textarea id="rule-block-patterns" rows="5">${escapeHtml((rules.block_patterns || []).join('\n'))}</textarea>
             </div>
         `;
     } else if (STATE.activePolicyName === 'content_filtering') {
@@ -507,11 +508,11 @@ function renderActivePolicyForm() {
             </div>
             <div class="form-group">
                 <label for="rule-block-categories">Violent/Harmful Block Categories (Comma-separated):</label>
-                <input type="text" id="rule-block-categories" value="${(rules.block_categories || []).join(', ')}">
+                <input type="text" id="rule-block-categories" value="${escapeHtml((rules.block_categories || []).join(', '))}">
             </div>
             <div class="form-group">
                 <label for="rule-allow-domains">Approved Knowledge domains (Comma-separated):</label>
-                <input type="text" id="rule-allow-domains" value="${(rules.allow_domains || []).join(', ')}">
+                <input type="text" id="rule-allow-domains" value="${escapeHtml((rules.allow_domains || []).join(', '))}">
             </div>
         `;
     } else if (STATE.activePolicyName === 'rate_limiting') {
@@ -533,7 +534,7 @@ function renderActivePolicyForm() {
         html = `
             <div class="form-group">
                 <label>Access Roles Permissions Configuration:</label>
-                <textarea id="rule-roles-json" rows="8" style="font-family: monospace;">${JSON.stringify(rules.roles || {}, null, 2)}</textarea>
+                <textarea id="rule-roles-json" rows="8" style="font-family: monospace;">${escapeHtml(JSON.stringify(rules.roles || {}, null, 2))}</textarea>
             </div>
         `;
     }

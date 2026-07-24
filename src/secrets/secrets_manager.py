@@ -177,9 +177,9 @@ class SecretsManager:
     """Unified facade that dispatches to the correct backend based on the reference prefix."""
 
     def __init__(self):
-        self._backends: Dict[str, SecretsBackend] = {
-            "env": EnvSecretsBackend(),
-        }
+        self._backends: Dict[str, SecretsBackend] = {}
+        if not settings._is_production:
+            self._backends["env"] = EnvSecretsBackend()
         # Attempt to initialise Vault backend if configured
         vault_addr = getattr(settings, "VAULT_ADDR", "") or os.environ.get("VAULT_ADDR", "")
         if vault_addr:
@@ -205,6 +205,8 @@ class SecretsManager:
             # Not a reference — return as-is (backward compat for raw values in dev)
             return reference
         backend, path = self._resolve_backend(reference)
+        if settings._is_production and not reference.startswith("vault://"):
+            raise SecretsError("Production only permits vault:// secret references")
         value = backend.get(path)
         try:
             from .audit_trail import log_secret_access

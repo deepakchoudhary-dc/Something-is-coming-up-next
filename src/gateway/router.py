@@ -34,8 +34,16 @@ from ..auth.jwt_auth import create_access_token, TokenError
 from ..providers.base import LLMMessage, ProviderError
 from ..providers.router_provider import ProviderRouter
 from ..secrets.secrets_manager import get_secrets_manager
+from .idempotency import (
+    IdempotencyService,
+    IdempotencyError,
+    IdempotencyConflict,
+    IdempotencyInProgress,
+    IdempotencyClaim,
+)
 
 router = APIRouter()
+
 logger = logging.getLogger(__name__)
 _classifier_instance: Optional[AIClassifier] = None
 _provider_router: Optional[ProviderRouter] = None
@@ -60,13 +68,15 @@ class AIRequest(BaseModel):
     prompt: str = Field(..., min_length=1, max_length=settings.MAX_PROMPT_LENGTH)
     system_prompt: Optional[str] = Field(None, max_length=4000)
     retrieved_context: Optional[str] = Field(None, max_length=20000)
-    user_id: str = Field(..., min_length=1, max_length=100)
+    user_id: Optional[str] = Field(None, min_length=1, max_length=100)
     context: Optional[str] = Field(None, max_length=10000)
     model: Optional[str] = Field("gpt-3.5-turbo", min_length=1, max_length=100)
     execute_code: Optional[bool] = False
 
     @validator("user_id")
     def validate_user_id(cls, value):
+        if value is None:
+            return value
         if not re.match(r"^[A-Za-z0-9_.:@-]+$", value):
             raise ValueError("user_id contains invalid characters")
         return value
@@ -112,8 +122,8 @@ class GatewayConfigUpdate(BaseModel):
 
     @validator("primary_provider", "fallback_provider")
     def validate_provider(cls, value):
-        if value not in {"mock", "openai", "anthropic", "custom"}:
-            raise ValueError("provider must be one of: mock, openai, anthropic, custom")
+        if value not in {"openai", "anthropic", "custom"}:
+            raise ValueError("provider must be one of: openai, anthropic, custom")
         return value
 
     @validator("primary_url")
@@ -210,11 +220,44 @@ def extract_python_code(text: str) -> Optional[str]:
         return match.group(1)
     return None
 
-@router.post("/process", response_model=AIResponse, dependencies=[_get_auth_dependency()])
-async def process_ai_request(request: AIRequest):
+@router.post("/process", response_model=AIResponse)
+async def process_ai_request(
+    request: AIRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+    idempotency_key: Optional[str] = Header(default=None, alias="Idempotency-Key"),
+):
     """
     Process an AI request through the security gateway
     """
+    if not isinstance(current_user, CurrentUser):
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Authenticated principal is required")
+    # The optional body identity is never used for authorization, quotas, tenancy, or auditing.
+    request = request.copy(update={"user_id": current_user.subject})
+    tenant_id = current_user.tenant_id
+
+    idempotency_service = IdempotencyService()
+    claim: Optional[IdempotencyClaim] = None
+    if idempotency_key:
+        try:
+            valid_key = idempotency_service.validate_key(idempotency_key)
+            fingerprint = idempotency_service.fingerprint(request.dict())
+            claim, replayed = idempotency_service.claim_or_replay(
+                tenant_id=tenant_id,
+                subject=current_user.subject,
+                key=valid_key,
+                request_fingerprint=fingerprint,
+            )
+            if replayed is not None:
+                return AIResponse(**replayed)
+        except ValueError as val_err:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(val_err))
+        except IdempotencyConflict as conf_err:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(conf_err))
+        except IdempotencyInProgress as prog_err:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(prog_err))
+        except IdempotencyError as idemp_err:
+            raise HTTPException(status_code=getattr(idemp_err, "status_code", 409), detail=str(idemp_err))
+
     start_time = time.time()
     request_id = get_request_id() or set_request_id()
     metrics = get_metrics()
@@ -224,6 +267,7 @@ async def process_ai_request(request: AIRequest):
     flagged = False
     security_score = 0.0
     sanitized_prompt = request.prompt
+    sanitized_context: Optional[str] = None
     response_text = ""
     anomalies_list = []
     trace_events: List[Dict[str, Any]] = []
@@ -263,9 +307,10 @@ async def process_ai_request(request: AIRequest):
             action_taken=action_taken,
             system_prompt=request.system_prompt,
             retrieved_context=request.retrieved_context,
-            trace=trace_events
+            trace=trace_events,
+            tenant_id=tenant_id
         )
-        return AIResponse(
+        resp = AIResponse(
             response=response_text,
             security_score=security_score,
             flagged=flagged,
@@ -276,6 +321,13 @@ async def process_ai_request(request: AIRequest):
             anomalies=anomalies_list,
             trace=trace_events
         )
+        if claim is not None:
+            try:
+                idempotency_service.complete(claim, resp.dict())
+            except Exception as comp_err:
+                logger.error("Failed to complete idempotency claim: %s", comp_err)
+        return resp
+
 
     # Fetch gateway configuration
     session = SessionLocal()
@@ -564,18 +616,12 @@ async def process_ai_request(request: AIRequest):
                 )
 
             if provider_type == "mock":
-                response_text = "Processed successfully."
-                add_trace("model_routing", "mock_response", {
-                    "reason": "mock provider request processed successfully"
-                })
+                raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="No production LLM provider is configured")
             else:
                 # Resolve secrets from references
                 sm = get_secrets_manager()
-                tenant_id = "default"
-                if ":" in request.user_id:
-                    tenant_id = request.user_id.split(":", 1)[0]
-                primary_key = sm.get_secret(gw_config.primary_key, actor=request.user_id, tenant_id=tenant_id) if gw_config and gw_config.primary_key else ""
-                fallback_key = sm.get_secret(gw_config.fallback_key, actor=request.user_id, tenant_id=tenant_id) if gw_config and gw_config.fallback_key else ""
+                primary_key = sm.get_secret(gw_config.primary_key, actor=current_user.subject, tenant_id=tenant_id) if gw_config and gw_config.primary_key else ""
+                fallback_key = sm.get_secret(gw_config.fallback_key, actor=current_user.subject, tenant_id=tenant_id) if gw_config and gw_config.fallback_key else ""
 
                 try:
                     pr = get_provider_router()
@@ -583,7 +629,7 @@ async def process_ai_request(request: AIRequest):
                     if request.system_prompt:
                         messages.append(LLMMessage(role="system", content=request.system_prompt))
                     if request.retrieved_context:
-                        messages.append(LLMMessage(role="user", content=f"Context details:\n{request.retrieved_context}"))
+                        messages.append(LLMMessage(role="user", content=f"<retrieved_context untrusted=\"true\">\n{sanitized_context}\n</retrieved_context>"))
                     messages.append(LLMMessage(role="user", content=sanitized_prompt))
 
                     llm_response = pr.complete(
@@ -668,14 +714,19 @@ async def process_ai_request(request: AIRequest):
         return finalize_response()
 
     except HTTPException as he:
+        if claim is not None:
+            idempotency_service.release(claim)
         raise he
     except Exception as e:
+        if claim is not None:
+            idempotency_service.release(claim)
         logger.error(f"Error processing request: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+
 # ── Auth Token Endpoint ───────────────────────────────────────────────
-@router.post("/auth/token", dependencies=[Depends(require_admin_api_key)])
+@router.post("/auth/token", dependencies=[_get_admin_dependency()])
 async def issue_token(req: TokenRequest):
     """Issue a JWT access token (admin-only in API-key mode)."""
     try:
@@ -690,7 +741,7 @@ async def issue_token(req: TokenRequest):
 
 
 # ── Gateway Config Endpoints ──────────────────────────────────────────
-@router.get("/config", dependencies=[Depends(require_admin_api_key)])
+@router.get("/config", dependencies=[_get_admin_dependency()])
 async def get_gateway_config():
     """Retrieve the current gateway configuration with masked keys"""
     session = SessionLocal()
@@ -721,7 +772,7 @@ async def get_gateway_config():
     finally:
         session.close()
 
-@router.post("/config", dependencies=[Depends(require_admin_api_key)])
+@router.post("/config", dependencies=[_get_admin_dependency()])
 async def update_gateway_config(update: GatewayConfigUpdate):
     """Update gateway configuration, storing keys as secret references"""
     sm = get_secrets_manager()
@@ -737,7 +788,7 @@ async def update_gateway_config(update: GatewayConfigUpdate):
         # Only update keys if the value isn't a masked placeholder
         if not sm.is_masked(update.primary_key):
             if update.primary_key and not sm.is_reference(update.primary_key):
-                config.primary_key = sm.store_secret(update.primary_key, path=f"GATEWAY_PRIMARY_KEY")
+                config.primary_key = sm.store_secret(update.primary_key, backend_name=settings.SECRETS_BACKEND, path="gateway/control-plane/primary")
             else:
                 config.primary_key = update.primary_key
             
@@ -747,7 +798,7 @@ async def update_gateway_config(update: GatewayConfigUpdate):
         config.fallback_url = update.fallback_url
         if not sm.is_masked(update.fallback_key):
             if update.fallback_key and not sm.is_reference(update.fallback_key):
-                config.fallback_key = sm.store_secret(update.fallback_key, path=f"GATEWAY_FALLBACK_KEY")
+                config.fallback_key = sm.store_secret(update.fallback_key, backend_name=settings.SECRETS_BACKEND, path="gateway/control-plane/fallback")
             else:
                 config.fallback_key = update.fallback_key
             
@@ -765,13 +816,13 @@ async def update_gateway_config(update: GatewayConfigUpdate):
 
 
 # Policy Management Endpoints
-@router.get("/policies", dependencies=[Depends(require_admin_api_key)])
+@router.get("/policies", dependencies=[_get_admin_dependency()])
 async def get_policies():
     """Get current security policies from database"""
     policy_manager = PolicyManager()
     return policy_manager.get_policies()
 
-@router.post("/policies", dependencies=[Depends(require_admin_api_key)])
+@router.post("/policies", dependencies=[_get_admin_dependency()])
 async def update_policies(update: PolicyUpdate):
     """Update security policies in database"""
     policy_manager = PolicyManager()
@@ -779,13 +830,13 @@ async def update_policies(update: PolicyUpdate):
 
 
 # Human-in-the-Loop endpoints
-@router.get("/hitl/pending", dependencies=[Depends(require_admin_api_key)])
+@router.get("/hitl/pending", dependencies=[_get_admin_dependency()])
 async def get_hitl_pending():
     """Fetch all pending manual approvals"""
     hitl_manager = HITLManager()
     return hitl_manager.get_pending_requests()
 
-@router.post("/hitl/approve/{request_id}", dependencies=[Depends(require_admin_api_key)])
+@router.post("/hitl/approve/{request_id}", dependencies=[_get_admin_dependency()])
 async def approve_hitl_request(request_id: str, decision: HITLDecision):
     """Approve or deny a pending request"""
     hitl_manager = HITLManager()
@@ -798,7 +849,7 @@ async def approve_hitl_request(request_id: str, decision: HITLDecision):
         raise HTTPException(status_code=404, detail="Request not found or not in pending state")
     return {"status": "success", "message": f"Request {request_id} has been {'approved' if decision.approved else 'denied'}"}
 
-@router.get("/hitl/status/{request_id}", dependencies=[Depends(require_admin_api_key)])
+@router.get("/hitl/status/{request_id}", dependencies=[_get_admin_dependency()])
 async def get_hitl_status(request_id: str):
     """Get the status of a specific HITL request"""
     hitl_manager = HITLManager()
@@ -807,7 +858,7 @@ async def get_hitl_status(request_id: str):
         raise HTTPException(status_code=404, detail="Request not found")
     return details
 
-@router.post("/hitl/assign/{request_id}", dependencies=[Depends(require_admin_api_key)])
+@router.post("/hitl/assign/{request_id}", dependencies=[_get_admin_dependency()])
 async def assign_hitl_request(request_id: str, assignment: HITLAssignment):
     """Assign a reviewer to a pending HITL request"""
     hitl_manager = HITLManager()
@@ -816,7 +867,7 @@ async def assign_hitl_request(request_id: str, assignment: HITLAssignment):
         raise HTTPException(status_code=404, detail="Request not found or not in pending state")
     return {"status": "success", "message": f"Request {request_id} assigned to {assignment.assigned_to}"}
 
-@router.get("/hitl/history", dependencies=[Depends(require_admin_api_key)])
+@router.get("/hitl/history", dependencies=[_get_admin_dependency()])
 async def get_hitl_history(limit: int = 50, offset: int = 0):
     """Get completed HITL review history"""
     hitl_manager = HITLManager()
@@ -824,7 +875,7 @@ async def get_hitl_history(limit: int = 50, offset: int = 0):
 
 
 # Monitoring, Auditing & Logs Endpoints
-@router.get("/monitoring/logs", dependencies=[Depends(require_admin_api_key)])
+@router.get("/monitoring/logs", dependencies=[_get_admin_dependency()])
 async def get_security_logs(limit: int = 50, offset: int = 0, action: Optional[str] = None):
     """Retrieve security transaction logs from SQLite"""
     session = SessionLocal()
@@ -867,7 +918,7 @@ async def get_security_logs(limit: int = 50, offset: int = 0, action: Optional[s
     finally:
         session.close()
 
-@router.get("/monitoring/stats", dependencies=[Depends(require_admin_api_key)])
+@router.get("/monitoring/stats", dependencies=[_get_admin_dependency()])
 async def get_dashboard_stats():
     """Retrieve dashboard statistics & aggregates"""
     session = SessionLocal()
@@ -939,7 +990,7 @@ async def get_dashboard_stats():
 
 
 # ── Metrics Endpoint ──────────────────────────────────────────────────
-@router.get("/monitoring/metrics", dependencies=[Depends(require_admin_api_key)])
+@router.get("/monitoring/metrics", dependencies=[_get_admin_dependency()])
 async def get_metrics_endpoint(format: str = "json"):
     """Return gateway metrics in JSON or Prometheus text format."""
     m = get_metrics()
@@ -948,14 +999,14 @@ async def get_metrics_endpoint(format: str = "json"):
     return m.to_dict()
 
 
-@router.get("/monitoring/alerts", dependencies=[Depends(require_admin_api_key)])
+@router.get("/monitoring/alerts", dependencies=[_get_admin_dependency()])
 async def get_alerts(limit: int = 50):
     """Return recent alerting events."""
     return get_metrics().get_alerts(limit)
 
 
 # ── Incident Export ───────────────────────────────────────────────────
-@router.post("/monitoring/incidents/export", dependencies=[Depends(require_admin_api_key)])
+@router.post("/monitoring/incidents/export", dependencies=[_get_admin_dependency()])
 async def export_incident_endpoint(req: IncidentExportRequest):
     """Export security logs for incident investigation with optional field redaction."""
     try:
@@ -974,14 +1025,14 @@ async def export_incident_endpoint(req: IncidentExportRequest):
 
 
 # ── Circuit Breaker Status ───────────────────────────────────────────
-@router.get("/monitoring/circuit-breakers", dependencies=[Depends(require_admin_api_key)])
+@router.get("/monitoring/circuit-breakers", dependencies=[_get_admin_dependency()])
 async def get_circuit_breaker_states():
     """Return current circuit breaker states for all providers."""
     return get_provider_router().get_circuit_states()
 
 
 # Red Teaming endpoints
-@router.get("/redteaming/payloads", dependencies=[Depends(require_admin_api_key)])
+@router.get("/redteaming/payloads", dependencies=[_get_admin_dependency()])
 async def get_red_teaming_payloads():
     """Fetch versioned red-teaming payloads for testing"""
     if not settings.REDTEAM_ENDPOINTS_ENABLED:
@@ -989,7 +1040,7 @@ async def get_red_teaming_payloads():
     from ..redteaming.simulation import load_versioned_payloads
     return load_versioned_payloads()
 
-@router.post("/redteaming/scan", dependencies=[Depends(require_admin_api_key)])
+@router.post("/redteaming/scan", dependencies=[_get_admin_dependency()])
 async def run_red_teaming_scan():
     """Initiate an automated red-teaming attack simulation against the gateway"""
     if not settings.REDTEAM_ENDPOINTS_ENABLED:
@@ -999,7 +1050,7 @@ async def run_red_teaming_scan():
     report = await suite.run_automated_scan()
     return report
 
-@router.get("/redteaming/reports", dependencies=[Depends(require_admin_api_key)])
+@router.get("/redteaming/reports", dependencies=[_get_admin_dependency()])
 async def get_redteam_reports(limit: int = 20):
     """Retrieve stored red-team scan reports"""
     if not settings.REDTEAM_ENDPOINTS_ENABLED:

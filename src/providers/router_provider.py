@@ -10,7 +10,9 @@ uses to send requests to external LLM providers.  It encapsulates:
 - Egress domain allowlist enforcement
 """
 
+import ipaddress
 import logging
+import socket
 from typing import Dict, List, Optional
 from urllib.parse import urlparse
 
@@ -52,13 +54,7 @@ class ProviderRouter:
         return [d.strip().lower() for d in raw.split(",") if d.strip()]
 
     def _check_egress(self, url: str) -> None:
-        """Enforce egress allowlist if configured."""
-        if not self._egress_allowlist:
-            return
-        parsed = urlparse(url)
-        host = (parsed.hostname or "").lower()
-        if not any(host == allowed or host.endswith("." + allowed) for allowed in self._egress_allowlist):
-            raise EgressDenied(url)
+        validate_outbound_url(url, self._egress_allowlist)
 
     def _get_breaker(self, provider_key: str) -> CircuitBreaker:
         if provider_key not in self._breakers:
@@ -153,3 +149,19 @@ class ProviderRouter:
     def get_circuit_states(self) -> Dict[str, dict]:
         """Return current circuit breaker states for observability."""
         return {name: cb.to_dict() for name, cb in self._breakers.items()}
+
+
+def validate_outbound_url(url: str, allowlist: List[str]) -> None:
+    """Fail-closed validation performed immediately before outbound dispatch."""
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password:
+        raise EgressDenied(url)
+    host = parsed.hostname.lower()
+    if not allowlist or not any(host == allowed or host.endswith("." + allowed) for allowed in allowlist):
+        raise EgressDenied(url)
+    try:
+        addresses = socket.getaddrinfo(host, parsed.port or 443, type=socket.SOCK_STREAM)
+    except socket.gaierror as exc:
+        raise EgressDenied(url) from exc
+    if not addresses or any(not ipaddress.ip_address(address[4][0]).is_global for address in addresses):
+        raise EgressDenied(url)
